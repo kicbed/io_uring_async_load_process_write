@@ -8,7 +8,8 @@ The final project is a bounded-memory, observable read-process-write pipeline:
 read raw block -> CPU preprocessing stage -> write processed block
 ```
 
-This repository is currently at Stage 0: environment and project skeleton.
+Current status: Stage 1 coroutine learning demos are complete. Stage 2 is next:
+Linux file I/O and the synchronous read-process-write baseline.
 
 ## Build
 
@@ -22,4 +23,7 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 ./build/asyncdataloader_stage0
+./build/stage1_simple_task_demo
+./build/stage1_manual_resume_demo
+./build/stage1_delay_awaiter_demo
 ```

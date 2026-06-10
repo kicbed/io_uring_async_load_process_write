@@ -11,6 +11,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(Threads REQUIRED)
+
 add_executable(asyncdataloader_stage0 src/main.cpp)
 target_compile_features(asyncdataloader_stage0 PRIVATE cxx_std_20)
 
@@ -19,6 +21,10 @@ target_compile_features(stage1_simple_task_demo PRIVATE cxx_std_20)
 
 add_executable(stage1_manual_resume_demo examples/coroutines/manual_resume_demo.cpp)
 target_compile_features(stage1_manual_resume_demo PRIVATE cxx_std_20)
+
+add_executable(stage1_delay_awaiter_demo examples/coroutines/delay_awaiter_demo.cpp)
+target_compile_features(stage1_delay_awaiter_demo PRIVATE cxx_std_20)
+target_link_libraries(stage1_delay_awaiter_demo PRIVATE Threads::Threads)
 
 enable_testing()
 
@@ -44,4 +50,12 @@ add_test(
     ${CMAKE_COMMAND}
     -D EXECUTABLE_PATH=$<TARGET_FILE:stage1_manual_resume_demo>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage1_manual_resume_demo_test.cmake
+)
+
+add_test(
+  NAME stage1_delay_awaiter_demo
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage1_delay_awaiter_demo>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage1_delay_awaiter_demo_test.cmake
 )
