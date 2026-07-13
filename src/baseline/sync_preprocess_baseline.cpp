@@ -49,7 +49,8 @@ SyncPreprocessResult run_sync_preprocess_baseline(const SyncPreprocessConfig& co
 
         // 处理数据
         for (std::size_t i = 0; i < read_result.bytes_read; ++i) {
-            if (block[i] >= 'a' && block[i] <= 'z' || block[i] >= 'A' && block[i] <= 'Z') {
+            if ((block[i] >= 'a' && block[i] <= 'z') ||
+                (block[i] >= 'A' && block[i] <= 'Z')) {
                 block[i] ^= 0x20;  // 或 block[i] ^= 0x20
             }
         }

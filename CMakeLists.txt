@@ -67,6 +67,47 @@ add_executable(stage2_sync_preprocess_demo
 target_compile_features(stage2_sync_preprocess_demo PRIVATE cxx_std_20)
 target_include_directories(stage2_sync_preprocess_demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_executable(stage3_bench_sync
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/util/timer.cpp
+  src/baseline/sync_preprocess_baseline.cpp
+  benchmark/stage3_bench_sync.cpp
+)
+target_compile_features(stage3_bench_sync PRIVATE cxx_std_20)
+target_include_directories(stage3_bench_sync PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(stage3_bench_mmap
+  src/util/timer.cpp
+  benchmark/stage3_bench_mmap.cpp
+)
+target_compile_features(stage3_bench_mmap PRIVATE cxx_std_20)
+target_include_directories(stage3_bench_mmap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_library(asyncdataloader_benchmark
+  src/benchmark/benchmark_stats.cpp
+  src/benchmark/benchmark_report.cpp
+)
+target_compile_features(asyncdataloader_benchmark PUBLIC cxx_std_20)
+target_include_directories(asyncdataloader_benchmark PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(stage3_bench_sync PRIVATE asyncdataloader_benchmark)
+target_link_libraries(stage3_bench_mmap PRIVATE asyncdataloader_benchmark)
+
+add_executable(stage3_bench_pread
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/util/timer.cpp
+  benchmark/stage3_bench_pread.cpp
+)
+target_compile_features(stage3_bench_pread PRIVATE cxx_std_20)
+target_include_directories(stage3_bench_pread PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(stage3_bench_pread PRIVATE asyncdataloader_benchmark)
+
+add_executable(stage3_benchmark_stats_test
+  tests/stage3_benchmark_stats_test.cpp
+)
+target_link_libraries(stage3_benchmark_stats_test PRIVATE asyncdataloader_benchmark)
+
 enable_testing()
 
 add_test(
@@ -112,4 +153,33 @@ add_test(
     ${CMAKE_COMMAND}
     -D EXECUTABLE_PATH=$<TARGET_FILE:stage2_sync_preprocess_demo>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage2_sync_preprocess_demo_test.cmake
+)
+
+add_test(
+  NAME stage3_bench_sync
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage3_bench_sync>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage3_bench_sync_test.cmake
+)
+
+add_test(
+  NAME stage3_bench_mmap
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage3_bench_mmap>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage3_bench_mmap_test.cmake
+)
+
+add_test(
+  NAME stage3_benchmark_stats
+  COMMAND stage3_benchmark_stats_test
+)
+
+add_test(
+  NAME stage3_bench_pread
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage3_bench_pread>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage3_bench_pread_test.cmake
 )
