@@ -12,6 +12,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBURING REQUIRED IMPORTED_TARGET liburing)
 
 add_executable(asyncdataloader_stage0 src/main.cpp)
 target_compile_features(asyncdataloader_stage0 PRIVATE cxx_std_20)
@@ -108,6 +110,32 @@ add_executable(stage3_benchmark_stats_test
 )
 target_link_libraries(stage3_benchmark_stats_test PRIVATE asyncdataloader_benchmark)
 
+add_executable(stage4_uring_read_once
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  examples/io_uring/uring_read_once.cpp
+)
+target_compile_features(stage4_uring_read_once PRIVATE cxx_std_20)
+target_include_directories(stage4_uring_read_once PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(stage4_uring_read_once PRIVATE PkgConfig::LIBURING)
+
+add_executable(stage4_uring_batch_read
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  examples/io_uring/uring_batch_read.cpp
+)
+target_compile_features(stage4_uring_batch_read PRIVATE cxx_std_20)
+target_include_directories(stage4_uring_batch_read PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(stage4_uring_batch_read PRIVATE PkgConfig::LIBURING)
+
+add_executable(stage4_uring_write_demo
+  src/util/fd_guard.cpp
+  examples/io_uring/uring_write_demo.cpp
+)
+target_compile_features(stage4_uring_write_demo PRIVATE cxx_std_20)
+target_include_directories(stage4_uring_write_demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(stage4_uring_write_demo PRIVATE PkgConfig::LIBURING)
+
 enable_testing()
 
 add_test(
@@ -182,4 +210,28 @@ add_test(
     ${CMAKE_COMMAND}
     -D EXECUTABLE_PATH=$<TARGET_FILE:stage3_bench_pread>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage3_bench_pread_test.cmake
+)
+
+add_test(
+  NAME stage4_uring_read_once
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage4_uring_read_once>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage4_uring_read_once_test.cmake
+)
+
+add_test(
+  NAME stage4_uring_batch_read
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage4_uring_batch_read>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage4_uring_batch_read_test.cmake
+)
+
+add_test(
+  NAME stage4_uring_write_demo
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage4_uring_write_demo>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage4_uring_write_demo_test.cmake
 )
