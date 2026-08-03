@@ -136,6 +136,34 @@ target_compile_features(stage4_uring_write_demo PRIVATE cxx_std_20)
 target_include_directories(stage4_uring_write_demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(stage4_uring_write_demo PRIVATE PkgConfig::LIBURING)
 
+add_executable(stage5_task_test
+  tests/stage5_task_test.cpp
+)
+target_compile_features(stage5_task_test PRIVATE cxx_std_20)
+target_include_directories(stage5_task_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(stage5_completion_request_test
+  tests/stage5_completion_request_test.cpp
+)
+target_compile_features(stage5_completion_request_test PRIVATE cxx_std_20)
+target_include_directories(
+  stage5_completion_request_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_executable(stage5_async_read_demo
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/coroutine/uring_read_awaiter.cpp
+  examples/io_uring/async_read_demo.cpp
+)
+target_compile_features(stage5_async_read_demo PRIVATE cxx_std_20)
+target_include_directories(
+  stage5_async_read_demo
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(stage5_async_read_demo PRIVATE PkgConfig::LIBURING)
+
 enable_testing()
 
 add_test(
@@ -234,4 +262,18 @@ add_test(
     ${CMAKE_COMMAND}
     -D EXECUTABLE_PATH=$<TARGET_FILE:stage4_uring_write_demo>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage4_uring_write_demo_test.cmake
+)
+
+add_test(NAME stage5_task COMMAND stage5_task_test)
+add_test(
+  NAME stage5_completion_request
+  COMMAND stage5_completion_request_test
+)
+
+add_test(
+  NAME stage5_async_read_demo
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage5_async_read_demo>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage5_async_read_demo_test.cmake
 )

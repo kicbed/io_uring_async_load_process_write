@@ -121,3 +121,96 @@ pipeline: it has no processor, writer overlap, BufferPool, or backpressure.
 No. Its value depends on workload, queue depth, storage, filesystem, kernel,
 batching, and cache state. Stage 4 proves API correctness only. Performance
 claims require the controlled benchmark work planned for Stage 11.
+
+## Stage 5: `io_uring` and C++20 Coroutine Integration
+
+### How does `co_await read_at()` connect to `io_uring`?
+
+`UringContext::read_at()` returns a `ReadAwaiter`. The C++ compiler applies the
+awaiter protocol to that object:
+
+```text
+await_ready()
+-> await_suspend(current coroutine handle)
+-> later: saved handle.resume()
+-> await_resume()
+```
+
+`ReadAwaiter::await_suspend()` prepares and submits the read SQE, attaches its
+embedded `CompletionRequest` through `user_data`, saves the current coroutine
+handle in that request, and returns `true`. Returning `true`, rather than
+`io_uring_submit()` itself, is what keeps the coroutine suspended.
+
+### What does `co_return co_await read_at(...)` mean?
+
+The inner `co_await` completes first and produces a byte count. The outer
+`co_return` passes that byte count to `Task<T>::promise_type::return_value()`.
+
+```cpp
+const std::size_t bytes_read = co_await context.read_at(...);
+co_return bytes_read;
+```
+
+`Task<T>` manages the whole coroutine and its final result. `ReadAwaiter`
+manages one asynchronous read operation.
+
+### Who resumes the coroutine?
+
+The kernel does not call `coroutine_handle::resume()`. It only produces a CQE.
+`UringContext::wait_one()` retrieves the `CompletionRequest` pointer from
+`CQE.user_data`, copies `cqe->res`, marks the CQE seen, and calls
+`CompletionRequest::complete()`. `complete()` stores the result and resumes the
+saved continuation exactly once.
+
+### Why is `CompletionRequest` separate from `ReadAwaiter`?
+
+It isolates the completion boundary:
+
+```text
+CQE.user_data -> CompletionRequest -> coroutine_handle
+```
+
+The request owns neither the coroutine frame nor the buffer. It stores borrowed
+continuation state and the completion result. Keeping duplicate-completion
+checks in this small class makes the exactly-once resume rule directly
+testable without requiring a live `io_uring`.
+
+### Why are `ReadAwaiter` and `CompletionRequest` non-movable?
+
+The SQE stores `&request_` in `user_data`. The kernel returns that same address
+in the CQE. Moving the awaiter would move its embedded request and invalidate
+the address held by the in-flight operation.
+
+The `Task` therefore owns a coroutine frame that keeps the active awaiter at a
+stable address across suspension.
+
+### Who owns the buffer during an asynchronous read?
+
+The vector in `async_read_demo::main()` owns the buffer. The kernel only borrows
+`buffer.data()` from submission until completion. The vector must not be
+destroyed, resized, or otherwise reallocated while the read is in flight.
+
+The same rule applies to the file descriptor, ring, coroutine frame, and request
+metadata: their owners must outlive the CQE path that borrows them.
+
+### How are results and errors propagated?
+
+- `cqe->res > 0` is the number of bytes read;
+- `cqe->res == 0` is EOF;
+- `cqe->res < 0` is `-errno`.
+
+`ReadAwaiter::await_resume()` returns a non-negative byte count or throws
+`std::system_error` for a negative result. An exception escaping the coroutine
+body is captured by `promise_type::unhandled_exception()` and rethrown when the
+caller invokes `Task::result()`.
+
+### What does Stage 5 prove, and what does it not prove?
+
+It proves that a real `io_uring` completion can resume the correct C++20
+coroutine, that request and buffer lifetimes are explicit, that one completion
+resumes once, and that CQE errors reach the caller.
+
+The current context waits for one completion on the calling thread. It is not
+yet a reusable `IOBackend`, a fallback system, or a read-process-write
+pipeline. Those boundaries belong to Stages 6-10. Coroutines organize control
+flow; they are not, by themselves, a performance optimization.
