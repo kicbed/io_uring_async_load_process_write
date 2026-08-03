@@ -8,8 +8,14 @@ The final project is a bounded-memory, observable read-process-write pipeline:
 read raw block -> CPU preprocessing stage -> write processed block
 ```
 
-Current status: Stage 1 coroutine learning demos are complete. Stage 2 is next:
-Linux file I/O and the synchronous read-process-write baseline.
+Current status: Stage 6 is complete. The project now has a common read-side
+`IOBackend`, concrete io_uring/thread-pool/synchronous implementations, and an
+automatic fallback factory. Stage 7, processing-stage registration and the
+pipeline framework, is next.
+
+The current backend demos are bounded learning components, not the final
+read-process-write pipeline. BufferPool-backed backpressure, stage metrics,
+three-stage overlap, and reliable output integration remain planned work.
 
 ## Build
 
@@ -19,11 +25,20 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-## Current Executable
+## Backend Fallback Demo
 
 ```bash
-./build/asyncdataloader_stage0
-./build/stage1_simple_task_demo
-./build/stage1_manual_resume_demo
-./build/stage1_delay_awaiter_demo
+./build/stage6_backend_fallback_demo \
+  /path/to/input \
+  --backend=auto
+
+./build/stage6_backend_fallback_demo \
+  /path/to/input \
+  --backend=auto \
+  --disable-uring
 ```
+
+The demo prints both the requested and selected backend, the byte count, and
+the first fixed-size block. This build currently requires the liburing
+development package even when the runtime factory falls back to another
+backend.

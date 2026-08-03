@@ -202,3 +202,173 @@ racing with continuation registration.
 This stage proves API correctness and lifecycle discipline only. It does not
 claim that coroutines themselves improve performance or that `io_uring` is
 always the fastest backend.
+
+## Stage 6: `IOBackend` Abstraction and Fallback
+
+### Scope
+
+Stage 6 puts the Stage 5 coroutine read path behind one runtime-polymorphic
+interface and supplies two fallback implementations:
+
+```text
+BackendConfig
+  -> BackendFactory
+       -> UringBackend
+       -> ThreadPoolBackend
+       -> SyncBackend
+  -> IOBackend::read_at()
+  -> Task<std::size_t>
+```
+
+This stage unifies read-side control flow. It does not yet define a common
+asynchronous write operation, processing stages, a BufferPool, inter-stage
+queues, metrics, or the final pipeline scheduler.
+
+### Common Backend Contract
+
+`IOBackend` exposes three virtual operations:
+
+| Operation | Contract |
+| --- | --- |
+| `name()` | Returns the selected implementation name for diagnostics. |
+| `read_at(fd, buffer, offset)` | Returns a lazy `Task<std::size_t>` for one positional read. |
+| `wait_one()` | Advances one pending asynchronous completion when a started task did not complete immediately. |
+
+The caller starts and consumes every backend in the same way:
+
+```cpp
+auto task = backend.read_at(fd, buffer, offset);
+task.start();
+if (!task.done()) {
+    backend.wait_one();
+}
+const std::size_t bytes_read = task.result();
+```
+
+The returned byte count has identical meaning for every implementation:
+
+- a full or short non-zero result is a successful read;
+- zero bytes means EOF;
+- an operation failure reaches `Task::result()` as `std::system_error`.
+
+### Concrete Backend Semantics
+
+| Backend | Where the read runs | Completion behavior |
+| --- | --- | --- |
+| `SyncBackend` | Calling thread, using blocking `pread()` | Completes during `Task::start()`; `wait_one()` is invalid. |
+| `UringBackend` | Kernel io_uring request path | Suspends after SQE submission; `wait_one()` consumes a CQE and resumes the task. |
+| `ThreadPoolBackend` | One of a fixed number of worker threads, using blocking `pread()` | Suspends after bounded queue submission; `wait_one()` consumes a published completion and resumes the task. |
+
+Coroutines provide a common suspension and result interface. They do not turn
+blocking `pread()` into kernel asynchronous I/O and are not themselves a
+performance optimization.
+
+### Thread-Pool Request Flow
+
+The fallback thread pool uses a fixed worker set and two bounded vectors:
+
+```text
+calling thread
+  -> ReadAwaiter::await_suspend(handle)
+  -> save continuation in ReadRequest
+  -> bounded work_queue
+  -> fixed worker executes blocking pread()
+  -> completion_queue
+  -> calling thread invokes wait_one()
+  -> CompletionRequest::complete(result)
+  -> resume saved coroutine
+  -> ReadAwaiter::await_resume()
+```
+
+`inflight_count_` covers queued, actively executing, and completed-but-not-yet-
+consumed requests. Submission at `max_inflight` fails immediately with
+`EAGAIN`. Both request vectors reserve `max_inflight` entries, and no accepted
+path pushes beyond that limit.
+
+Workers do not resume coroutines directly. They only publish completion state.
+`wait_one()` resumes on the calling thread, keeping continuation execution out
+of the I/O worker and matching the current caller-driven io_uring completion
+model.
+
+### Factory and Fallback Policy
+
+`BackendFactory` combines factory and strategy patterns. It returns a
+`std::unique_ptr<IOBackend>` whose dynamic type is selected from
+`BackendConfig`.
+
+Explicit selection is fail-fast:
+
+```text
+Uring      -> create UringBackend or propagate the error
+ThreadPool -> create ThreadPoolBackend or propagate the error
+Sync       -> create SyncBackend
+```
+
+Only `BackendKind::Auto` enables fallback:
+
+```text
+try UringBackend
+  -> initialization std::system_error: try ThreadPoolBackend
+       -> worker initialization std::system_error: use SyncBackend
+```
+
+The factory catches only construction-time `std::system_error`. Invalid
+configuration, allocation failure, and unknown enum values are not silently
+hidden. An error from a submitted `read_at()` is also not retried through a
+different backend: a bad file descriptor or permission error is an operation
+failure, not evidence that the backend is unavailable. This distinction will
+also prevent duplicate side effects when write support is added later.
+
+The demo exposes deterministic `--disable-uring` and
+`--disable-thread-pool` switches for Auto-mode tests. They remove a candidate
+from the selection chain; they do not alter explicit backend requests.
+
+### Ownership and Lifetime
+
+For one backend read, ownership is:
+
+| Object | Owner | Borrower |
+| --- | --- | --- |
+| Concrete backend | `std::unique_ptr<IOBackend>` in the caller | Active task/awaiter uses the backend until completion. |
+| Coroutine frame | Caller-owned `Task<std::size_t>` | `CompletionRequest` stores a non-owning continuation handle. |
+| Buffer | Caller | Sync read, kernel, or worker borrows its address until completion. |
+| File descriptor | Caller-owned `FdGuard` | Selected backend borrows the integer descriptor until completion. |
+| Thread-pool request | Awaiter inside the coroutine frame | Work and completion queues temporarily borrow its stable pointer. |
+
+The required lifetime ordering is:
+
+```text
+start read
+  -> keep fd + buffer + backend + Task alive
+  -> consume completion
+  -> obtain Task result
+  -> destroy Task before backend/buffer/fd
+```
+
+The fallback demo declares its objects so normal reverse destruction follows
+that order. Stage 8 will replace the demo-owned fixed buffer with an RAII
+BufferPool handle.
+
+### Boundedness and Backpressure Boundary
+
+The fallback demo reads one fixed 4 KiB block. `ThreadPoolBackend` bounds its
+accepted requests with `max_inflight`; it never creates one thread per
+coroutine and never uses an unbounded work queue.
+
+This is a backend-local capacity limit, not the final pipeline backpressure
+mechanism. A full producer must wait and retry when capacity becomes available
+instead of treating `EAGAIN` as permanent failure. BufferPool ownership and
+bounded inter-stage queues belong to Stage 8, and read/process/write overlap
+belongs to Stage 10.
+
+### Current Boundaries
+
+- The common interface currently covers positional reads only.
+- `wait_one()` is a caller-driven one-completion API, not a general event loop.
+- CMake currently requires the liburing development package at build time;
+  runtime ring-initialization failure can fall back, but a no-liburing build is
+  not yet supported.
+- Auto mode exposes the selected backend, but does not retain the original
+  initialization error as structured diagnostic data.
+- There is no claim that io_uring is universally faster than the alternatives.
+- The current demos are not the final processing pipeline.

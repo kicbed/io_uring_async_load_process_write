@@ -214,3 +214,102 @@ The current context waits for one completion on the calling thread. It is not
 yet a reusable `IOBackend`, a fallback system, or a read-process-write
 pipeline. Those boundaries belong to Stages 6-10. Coroutines organize control
 flow; they are not, by themselves, a performance optimization.
+
+## Stage 6: `IOBackend` Abstraction and Fallback
+
+### Why introduce an `IOBackend` interface?
+
+The future pipeline should depend on read semantics, not on liburing calls or
+thread-pool details. `IOBackend` gives every implementation the same
+`name()`, `read_at()`, and `wait_one()` contract. The pipeline can therefore be
+written once and select an implementation at runtime.
+
+The current interface is read-only. A common write operation still has to be
+designed before the final pipeline is complete.
+
+### Which design patterns are used?
+
+`BackendFactory` is a factory: it owns construction and fallback policy.
+`UringBackend`, `ThreadPoolBackend`, and `SyncBackend` are interchangeable
+strategies behind `IOBackend`. A `std::unique_ptr<IOBackend>` expresses both
+runtime polymorphism and unique RAII ownership of the selected implementation.
+
+### Is `ThreadPoolBackend` real asynchronous I/O?
+
+It is asynchronous relative to the caller, but its workers still execute
+blocking `pread()`. It is a bounded blocking-I/O offload mechanism, not kernel
+asynchronous I/O. A fixed worker set processes many requests; there is not one
+thread per coroutine.
+
+### How does the thread pool connect to a coroutine?
+
+`ReadAwaiter::await_suspend()` saves the current coroutine handle in the
+request and places a pointer to that request in the bounded work queue. A
+worker performs `pread()` and publishes the result to the completion queue.
+The caller's `wait_one()` removes that completion and calls `resume()` on the
+saved handle. `await_resume()` then returns the byte count or throws.
+
+### Why does the worker not resume the coroutine directly?
+
+Direct resumption would run everything after `co_await` on an I/O worker. The
+current design keeps workers responsible only for blocking reads and resumes
+continuations on the thread that calls `wait_one()`. This makes execution
+context explicit and matches the current io_uring backend's caller-driven
+completion model.
+
+### Why does only Auto mode fall back?
+
+An explicit backend request is a requirement and should fail visibly if it
+cannot be satisfied. Auto mode is permission to choose the best available
+candidate. Silently replacing an explicitly requested Uring backend with Sync
+would make configuration and benchmark results misleading.
+
+### Which failures trigger fallback?
+
+Only backend construction-time `std::system_error` triggers the Auto chain.
+Invalid configuration is reported rather than hidden. A later read failure,
+such as `EBADF` or `EACCES`, is returned to the caller and is not retried on a
+different backend. Retrying arbitrary operations would hide bugs and could
+duplicate future write side effects.
+
+### Why check `Task::done()` before `wait_one()`?
+
+`SyncBackend` executes its blocking read during `Task::start()` and completes
+immediately. Uring and thread-pool requests normally suspend and need a
+completion event. The common caller therefore uses:
+
+```cpp
+task.start();
+if (!task.done()) {
+    backend.wait_one();
+}
+```
+
+Calling `wait_one()` unconditionally would be an error for SyncBackend because
+it has no pending asynchronous completion.
+
+### How is the thread-pool queue bounded?
+
+`inflight_count_` includes requests waiting for workers, executing in workers,
+and waiting in the completion queue. Once it reaches `max_inflight`, a new
+submission completes immediately with `EAGAIN`. This bounds backend-owned
+request queues, although full BufferPool and inter-stage backpressure still
+belong to Stage 8.
+
+### What are the buffer ownership rules?
+
+The caller owns the file descriptor, buffer, backend, and `Task`. The selected
+backend only borrows the fd and buffer until completion. The Task owns the
+coroutine frame; the frame owns the active awaiter and request metadata. All
+four caller-owned objects must outlive the operation.
+
+### What does the fallback demo prove?
+
+It proves that the same caller code can read through all three strategies and
+that disabling io_uring in Auto mode selects ThreadPool, while disabling both
+asynchronous candidates selects Sync. It reports both requested and selected
+backend names so fallback is observable.
+
+It does not prove end-to-end throughput, processing-stage overlap, large-file
+memory bounds, or that io_uring is faster. Those claims require later pipeline
+and benchmark stages.

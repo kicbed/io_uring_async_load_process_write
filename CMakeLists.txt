@@ -164,6 +164,94 @@ target_include_directories(
 )
 target_link_libraries(stage5_async_read_demo PRIVATE PkgConfig::LIBURING)
 
+add_executable(stage6_io_backend_contract_test
+  tests/stage6_io_backend_contract_test.cpp
+)
+target_compile_features(stage6_io_backend_contract_test PRIVATE cxx_std_20)
+target_include_directories(
+  stage6_io_backend_contract_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_executable(stage6_sync_backend_test
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/backend/sync_backend.cpp
+  tests/stage6_sync_backend_test.cpp
+)
+target_compile_features(stage6_sync_backend_test PRIVATE cxx_std_20)
+target_include_directories(
+  stage6_sync_backend_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_executable(stage6_uring_backend_test
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/coroutine/uring_read_awaiter.cpp
+  src/backend/uring_backend.cpp
+  tests/stage6_uring_backend_test.cpp
+)
+target_compile_features(stage6_uring_backend_test PRIVATE cxx_std_20)
+target_include_directories(
+  stage6_uring_backend_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(stage6_uring_backend_test PRIVATE PkgConfig::LIBURING)
+
+add_executable(stage6_thread_pool_backend_test
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/backend/thread_pool_backend.cpp
+  tests/stage6_thread_pool_backend_test.cpp
+)
+target_compile_features(stage6_thread_pool_backend_test PRIVATE cxx_std_20)
+target_include_directories(
+  stage6_thread_pool_backend_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(stage6_thread_pool_backend_test PRIVATE Threads::Threads)
+
+add_executable(stage6_backend_factory_test
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/coroutine/uring_read_awaiter.cpp
+  src/backend/sync_backend.cpp
+  src/backend/uring_backend.cpp
+  src/backend/thread_pool_backend.cpp
+  src/backend/backend_factory.cpp
+  tests/stage6_backend_factory_test.cpp
+)
+target_compile_features(stage6_backend_factory_test PRIVATE cxx_std_20)
+target_include_directories(
+  stage6_backend_factory_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(
+  stage6_backend_factory_test
+  PRIVATE PkgConfig::LIBURING Threads::Threads
+)
+
+add_executable(stage6_backend_fallback_demo
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/coroutine/uring_read_awaiter.cpp
+  src/backend/sync_backend.cpp
+  src/backend/uring_backend.cpp
+  src/backend/thread_pool_backend.cpp
+  src/backend/backend_factory.cpp
+  examples/backend_fallback_demo.cpp
+)
+target_compile_features(stage6_backend_fallback_demo PRIVATE cxx_std_20)
+target_include_directories(
+  stage6_backend_fallback_demo
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(
+  stage6_backend_fallback_demo
+  PRIVATE PkgConfig::LIBURING Threads::Threads
+)
+
 enable_testing()
 
 add_test(
@@ -276,4 +364,37 @@ add_test(
     ${CMAKE_COMMAND}
     -D EXECUTABLE_PATH=$<TARGET_FILE:stage5_async_read_demo>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage5_async_read_demo_test.cmake
+)
+
+add_test(
+  NAME stage6_io_backend_contract
+  COMMAND stage6_io_backend_contract_test
+)
+
+add_test(
+  NAME stage6_sync_backend
+  COMMAND stage6_sync_backend_test
+)
+
+add_test(
+  NAME stage6_uring_backend
+  COMMAND stage6_uring_backend_test
+)
+
+add_test(
+  NAME stage6_thread_pool_backend
+  COMMAND stage6_thread_pool_backend_test
+)
+
+add_test(
+  NAME stage6_backend_factory
+  COMMAND stage6_backend_factory_test
+)
+
+add_test(
+  NAME stage6_backend_fallback_demo
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage6_backend_fallback_demo>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage6_backend_fallback_demo_test.cmake
 )
