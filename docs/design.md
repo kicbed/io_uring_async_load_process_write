@@ -372,3 +372,143 @@ belongs to Stage 10.
   initialization error as structured diagnostic data.
 - There is no claim that io_uring is universally faster than the alternatives.
 - The current demos are not the final processing pipeline.
+
+## Stage 7: Stage Registration and Pipeline Framework
+
+### Scope
+
+Stage 7 defines the CPU-processing boundary between the read-side backend and
+the future writer. It answers two questions:
+
+1. What interface must a processing step implement?
+2. How can several processing steps be registered and run in a deterministic
+   order over one caller-owned block?
+
+The stage is deliberately independent of file I/O. It does not yet schedule
+blocks, own buffers, create worker threads, record metrics, or write output.
+Those responsibilities remain in later stages.
+
+### Components and Responsibilities
+
+| Component | Responsibility |
+| --- | --- |
+| `Stage` | Abstract processing contract: expose a name and process one borrowed mutable byte span. |
+| `Pipeline` | Own registered stage objects and invoke them in registration order. |
+| `NoOpStage` | Leave the block unchanged; useful as a control and composition test. |
+| `NormalizeStage` | Perform real per-block min-max normalization into the byte range `[0, 255]`. |
+| `ChecksumStage` | Compute the current block's 64-bit FNV-1a checksum without changing the block. |
+| `AffineStage` demo | Show that caller code can add a new stage without modifying the library. |
+
+### Registration and Processing Flow
+
+Registration transfers unique ownership of each concrete stage into the
+pipeline:
+
+```text
+make_unique<ConcreteStage>()
+  -> Pipeline::add_stage(unique_ptr<Stage>)
+       -> reject null
+       -> move into vector<unique_ptr<Stage>>
+```
+
+Processing borrows one block and uses virtual dispatch for each registered
+object:
+
+```text
+caller-owned mutable block
+  -> Stage 0::process(span)
+  -> Stage 1::process(span)
+  -> Stage 2::process(span)
+  -> same caller-owned block
+```
+
+The custom demo makes the data change visible:
+
+```text
+[1, 2, 3]
+  -> AffineStage: output = input * 2 + 1
+  -> [3, 5, 7]
+```
+
+Registration order is execution order. The pipeline stores objects rather
+than function pointers so that stages can have configuration and state while
+sharing one polymorphic interface.
+
+### Ownership and Lifetime
+
+`Pipeline` owns every registered `Stage` through `std::unique_ptr<Stage>`.
+Calling `add_stage(std::move(stage))` is an explicit ownership transfer; the
+caller's pointer becomes empty after the move. A virtual destructor on `Stage`
+ensures deleting a concrete object through the base pointer runs the complete
+destructor chain.
+
+The data block follows a different rule:
+
+| Object | Owner | Borrower |
+| --- | --- | --- |
+| Pipeline | Caller | Call stack during `process()`. |
+| Registered stage | `Pipeline` | No external borrower is retained. |
+| Byte storage | Caller | Each stage borrows it through `std::span<std::byte>` only for the current call. |
+
+`std::span` contains a pointer and a length; it does not own or copy the
+bytes. A stage may change bytes in place but must not retain the span or its
+data pointer after `process()` returns. The caller therefore controls storage
+lifetime now, while Stage 8 will make that caller an RAII BufferPool handle.
+
+### Built-In Stage Semantics
+
+`NoOpStage` performs no work and preserves all bytes. It is a test/control
+stage, not evidence of final preprocessing.
+
+`NormalizeStage` scans one block for its minimum and maximum and then maps each
+byte with integer arithmetic:
+
+```text
+normalized = (value - minimum) * 255 / (maximum - minimum)
+```
+
+An empty block is unchanged. If every byte is equal, the block becomes all
+zeroes, avoiding division by zero. The operation uses constant extra memory
+and constitutes a real byte transformation, although end-to-end processing
+proof still requires its later integration into the streaming pipeline.
+
+`ChecksumStage` computes FNV-1a into `last_checksum_` and leaves the input
+unchanged. The value is replaced on every call. A single instance is not safe
+for simultaneous calls because its state is unsynchronized; a future parallel
+processor must choose per-worker instances or redesign result ownership rather
+than silently sharing it.
+
+### Error and Partial-Update Semantics
+
+- `Pipeline::add_stage(nullptr)` throws `std::invalid_argument`.
+- If a stage throws, the exception propagates to the caller.
+- Later stages are not invoked after that failure.
+- Changes made by earlier stages remain in the caller's block; Stage 7 does
+  not provide transactional rollback.
+
+These rules keep failures visible and avoid pretending that in-place mutation
+can be automatically undone.
+
+### Boundedness and Backpressure Boundary
+
+Stage 7 processes exactly the span supplied by its caller and allocates no
+second copy of that block. The built-in transforms use constant extra space.
+The stage list uses memory proportional to the configured number of stages,
+not the input file size.
+
+This framework alone does not bound how many blocks an external producer may
+create. Stage 8 must supply a fixed-capacity BufferPool and bounded handoff so
+the reader waits when downstream work is full. Stage 10 will then integrate
+the stage chain into overlapping read/process/write execution.
+
+### Current Boundaries
+
+- Processing is synchronous and single-call; there is no processor thread or
+  inter-stage queue yet.
+- The framework operates on one caller-owned block and never reads a whole
+  file.
+- There is no backend-to-pipeline connection or writer integration yet.
+- There are no stage latency or throughput metrics yet.
+- Ordered output, reliable temporary-file persistence, `fsync`, and rename
+  remain later-stage work.
+- No performance claim is made from stage registration or virtual dispatch.

@@ -252,6 +252,43 @@ target_link_libraries(
   PRIVATE PkgConfig::LIBURING Threads::Threads
 )
 
+add_library(asyncdataloader_pipeline
+  src/pipeline/builtin_stages.cpp
+  src/pipeline/pipeline.cpp
+)
+target_compile_features(asyncdataloader_pipeline PUBLIC cxx_std_20)
+target_include_directories(
+  asyncdataloader_pipeline
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_executable(stage7_pipeline_registration_test
+  tests/stage7_pipeline_registration_test.cpp
+)
+target_compile_features(stage7_pipeline_registration_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage7_pipeline_registration_test
+  PRIVATE asyncdataloader_pipeline
+)
+
+add_executable(stage7_builtin_stages_test
+  tests/stage7_builtin_stages_test.cpp
+)
+target_compile_features(stage7_builtin_stages_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage7_builtin_stages_test
+  PRIVATE asyncdataloader_pipeline
+)
+
+add_executable(stage7_custom_stage_demo
+  examples/stage7_custom_stage_demo.cpp
+)
+target_compile_features(stage7_custom_stage_demo PRIVATE cxx_std_20)
+target_link_libraries(
+  stage7_custom_stage_demo
+  PRIVATE asyncdataloader_pipeline
+)
+
 enable_testing()
 
 add_test(
@@ -397,4 +434,22 @@ add_test(
     ${CMAKE_COMMAND}
     -D EXECUTABLE_PATH=$<TARGET_FILE:stage6_backend_fallback_demo>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage6_backend_fallback_demo_test.cmake
+)
+
+add_test(
+  NAME stage7_pipeline_registration
+  COMMAND stage7_pipeline_registration_test
+)
+
+add_test(
+  NAME stage7_builtin_stages
+  COMMAND stage7_builtin_stages_test
+)
+
+add_test(
+  NAME stage7_custom_stage_demo
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage7_custom_stage_demo>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage7_custom_stage_demo_test.cmake
 )

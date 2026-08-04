@@ -313,3 +313,111 @@ backend names so fallback is observable.
 It does not prove end-to-end throughput, processing-stage overlap, large-file
 memory bounds, or that io_uring is faster. Those claims require later pipeline
 and benchmark stages.
+
+## Stage 7: Stage Registration and Pipeline Framework
+
+### What problem does the Stage interface solve?
+
+It separates the pipeline's control flow from a particular preprocessing
+algorithm. The orchestrator only needs to call `Stage::process(span)`; a
+normalizer, validator, checksum calculator, or caller-defined transform can be
+substituted without changing that orchestration code.
+
+In design-pattern terms, each concrete Stage is a Strategy, and `Pipeline` is
+the ordered composition that owns and invokes those strategies.
+
+### Why use virtual objects instead of only function pointers?
+
+A plain function pointer can select stateless behavior, but it cannot naturally
+carry per-stage configuration or state. A Stage object can hold values such as
+the affine multiplier and offset or the checksum from its latest call. Virtual
+dispatch gives all such objects one stable interface.
+
+`std::function` could also store stateful callables, but the explicit class
+interface makes the stage name, ownership rule, extension point, and future
+stage-specific API easier to explain and test in this project.
+
+### Why does Pipeline store `std::unique_ptr<Stage>`?
+
+Concrete stages have different sizes, so storing base objects by value would
+slice away derived behavior. A unique pointer preserves polymorphism and says
+that exactly one Pipeline owns each registered stage. `std::move` makes that
+ownership transfer explicit, and destruction is automatic through RAII.
+
+### Why must Stage have a virtual destructor?
+
+The Pipeline destroys concrete stages through `Stage*` held by
+`unique_ptr<Stage>`. Without a virtual base destructor, deleting a derived
+object through that base pointer is undefined behavior and may skip derived
+cleanup.
+
+### What ownership does `std::span<std::byte>` express?
+
+The span is a non-owning view: pointer plus length. The caller owns the byte
+storage, and each stage may mutate it only during `process()`. A stage must not
+save the span or pointer because the underlying BufferPool lease may be
+returned immediately after later pipeline work completes.
+
+### In what order do stages run?
+
+They run in registration order over the same block. If `A`, `B`, and `C` are
+registered in that order, the data path is:
+
+```text
+block -> A -> B -> C -> block
+```
+
+If a stage throws, the error propagates and later stages do not run. Earlier
+in-place modifications are not rolled back.
+
+### What do the built-in stages prove?
+
+- `NoOpStage` proves interface composition while preserving bytes.
+- `NormalizeStage` performs an actual per-block min-max byte transformation
+  using constant extra memory.
+- `ChecksumStage` proves that a stage may observe data and retain a small
+  result without changing the block.
+
+NoOp and checksum alone are not final CPU-processing evidence. Normalize is a
+real transform, but it still needs end-to-end streaming integration in Stage
+10 before making a pipeline-level claim.
+
+### Is ChecksumStage thread-safe?
+
+Not for concurrent calls on the same instance, because every call writes
+`last_checksum_` without synchronization. Stage 7 executes stages
+sequentially. A future parallel processor should use one stage chain per
+worker or redesign how per-block results are returned; adding a mutex without
+considering the architecture could unnecessarily serialize processing.
+
+### How is Stage 7 still bounded?
+
+The pipeline receives one existing span, copies no block, and built-in stages
+use constant extra memory. The vector grows only with the configured number of
+stage objects. However, Stage 7 cannot bound an external reader's number of
+blocks; BufferPool capacity and backpressure are Stage 8 responsibilities.
+
+### What does the custom affine demo demonstrate?
+
+Caller code derives from `Stage`, stores configuration `(multiplier=2,
+offset=1)`, registers the object by moving a `unique_ptr`, and transforms
+`[1,2,3]` into `[3,5,7]`. The library itself is unchanged, which demonstrates
+an open extension point rather than three hard-coded function calls.
+
+### What does Stage 7 not prove?
+
+It does not yet connect reading to processing or writing, overlap the three
+stages, enforce file-level backpressure, preserve parallel output order,
+persist through temporary-file plus `fsync` plus rename, or collect metrics.
+Those are explicit later-stage boundaries, so the single-block synchronous
+demo is not presented as the final pipeline.
+
+Interview-ready short version:
+
+> I introduced a polymorphic Stage strategy and a Pipeline that owns stages
+> with unique_ptr and invokes them in registration order over a borrowed span.
+> The caller retains buffer ownership, stages cannot retain the view, and the
+> built-ins include a real constant-space normalization transform. This stage
+> establishes the extensible CPU-processing boundary; bounded BufferPool
+> handoff and end-to-end read/process/write overlap are deliberately later
+> stages.
