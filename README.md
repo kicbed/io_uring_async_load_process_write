@@ -8,18 +8,16 @@ The final project is a bounded-memory, observable read-process-write pipeline:
 read raw block -> CPU preprocessing stage -> write processed block
 ```
 
-Current status: Stage 7 is complete. The project now has a common read-side
-`IOBackend`, concrete io_uring/thread-pool/synchronous
-implementations, an automatic fallback factory, and the first processing
-boundary: a caller-owned block can pass through registered stages in order.
-Built-in no-op, per-block min-max normalization, and FNV-1a checksum stages are
-available for composing and testing processing chains. A custom affine-stage
-demo shows how callers can extend the processing interface outside the library.
+Current status: Stage 8 is complete. The project now has validated pipeline
+capacity settings, fixed-count aligned buffers, move-only RAII buffer leases,
+a blocking thread-safe BufferPool, and a fixed-capacity SPSC handoff queue. A
+backpressure demo shows that a producer waits when its downstream queue is full
+and that every buffer returns to the pool after consumption.
 
-The current backend demos are bounded learning components, not the final
-read-process-write pipeline. Stage 8 will add BufferPool-backed ownership and
-backpressure; stage metrics, three-stage overlap, and reliable output
-integration remain planned work.
+These components establish bounded ownership and handoff; they are not yet the
+final read-process-write pipeline. Stage 9 will add metrics data structures and
+instrumentation. Three-stage overlap, ordered reliable output, and large-file
+acceptance tests remain planned work.
 
 ## Build
 
@@ -28,6 +26,21 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
+
+## Stage 8 Backpressure Demo
+
+```bash
+./build/stage8_backpressure_demo
+```
+
+The demo uses two aligned pool buffers and a queue with one slot. The first
+handle fills the queue, the producer's second `push()` waits, and a consumer
+`pop()` makes space and wakes it. The output also verifies FIFO markers and
+that both RAII leases returned their buffers to the pool.
+
+See [`docs/stage8_odirect_alignment.md`](docs/stage8_odirect_alignment.md) for
+the boundary between Stage 8's aligned allocation and a future real
+`O_DIRECT` I/O path.
 
 ## Custom Stage Demo
 

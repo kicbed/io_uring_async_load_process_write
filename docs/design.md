@@ -512,3 +512,73 @@ the stage chain into overlapping read/process/write execution.
 - Ordered output, reliable temporary-file persistence, `fsync`, and rename
   remain later-stage work.
 - No performance claim is made from stage registration or virtual dispatch.
+
+## Stage 8: Bounded Buffer Ownership and Backpressure
+
+### Components
+
+| Component | Responsibility |
+| --- | --- |
+| `PipelineConfig` | Validate block size, pool capacity, queue depth, alignment, and pool-size overflow. |
+| `AlignedBuffer` | Own and free one `posix_memalign()` allocation. |
+| `AlignedBufferPool` | Own a fixed number of aligned buffers and block acquisition when all leases are active. |
+| `BufferHandle` | Represent one move-only lease and return its slot to the pool on destruction. |
+| `SPSCQueue<T>` | Transfer move-only work FIFO between one producer and one consumer with fixed capacity. |
+
+### Ownership and Handoff
+
+The pool always owns the physical allocations. A handle owns only the right to
+use one indexed slot:
+
+```text
+pool free list
+  -> acquire handle
+  -> producer fills pool-owned bytes
+  -> queue slot owns moved handle
+  -> consumer pops moved handle
+  -> handle destructor returns index to pool free list
+```
+
+Moving a handle changes lease ownership without copying block bytes. A
+moved-from handle has no pool pointer, so its destructor performs no second
+return.
+
+### Two Bounded Layers
+
+The BufferPool and queue are complementary:
+
+- `max_inflight_buffers` bounds physical block memory across the system;
+- `queue_depth` bounds the backlog between two adjacent stages.
+
+Pool exhaustion blocks `acquire()`. Queue exhaustion blocks `push()`. Both
+wait using a condition variable predicate, which releases the mutex while the
+thread sleeps and rechecks state after wakeup.
+
+`SPSCQueue` uses a fixed vector of optional slots with `head_`, `tail_`, and
+`size_`. Reusing indices as they wrap avoids an unbounded container. This first
+version is mutex-based rather than lock-free; correctness is the Stage 8 goal.
+
+### Lifetime Boundary
+
+The pool must outlive all handles. The queue must outlive its producer and
+consumer, and waiting threads must be stopped and joined before either object
+is destroyed. The Stage 8 demo uses a fixed item count, so it does not yet need
+an end-of-stream, close, cancellation, or cross-thread error protocol. Those
+protocols must be designed before the Stage 10 end-to-end pipeline.
+
+### `O_DIRECT` Boundary
+
+Aligned allocation is necessary but not sufficient for direct I/O. Buffer
+address, request length, and file offset may each have filesystem-specific
+alignment requirements. See `docs/stage8_odirect_alignment.md` for the exact
+Stage 8 guarantee and remaining runtime checks.
+
+### Current Boundaries
+
+- The demo uses synthetic byte markers, not real file I/O or CPU processing.
+- There is one handoff queue, not the final read/process and process/write
+  pair.
+- There are no queue-depth, wait-time, or memory-high-watermark metrics yet.
+- Ordered output, temporary-file persistence, `fsync`, and rename are not
+  implemented here.
+- No throughput or direct-I/O performance claim is made.

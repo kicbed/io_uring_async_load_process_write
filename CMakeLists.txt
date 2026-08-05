@@ -289,6 +289,87 @@ target_link_libraries(
   PRIVATE asyncdataloader_pipeline
 )
 
+add_library(asyncdataloader_config
+  src/config/pipeline_config.cpp
+)
+target_compile_features(asyncdataloader_config PUBLIC cxx_std_20)
+target_include_directories(
+  asyncdataloader_config
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_executable(stage8_pipeline_config_test
+  tests/stage8_pipeline_config_test.cpp
+)
+target_compile_features(stage8_pipeline_config_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage8_pipeline_config_test
+  PRIVATE asyncdataloader_config
+)
+
+add_library(asyncdataloader_buffer
+  src/buffer/aligned_buffer.cpp
+  src/buffer/aligned_buffer_pool.cpp
+  src/buffer/buffer_handle.cpp
+)
+target_compile_features(asyncdataloader_buffer PUBLIC cxx_std_20)
+target_include_directories(
+  asyncdataloader_buffer
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(
+  asyncdataloader_buffer
+  PUBLIC asyncdataloader_config Threads::Threads
+)
+
+add_executable(stage8_aligned_buffer_test
+  tests/stage8_aligned_buffer_test.cpp
+)
+target_compile_features(stage8_aligned_buffer_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage8_aligned_buffer_test
+  PRIVATE asyncdataloader_buffer
+)
+
+add_executable(stage8_buffer_handle_test
+  tests/stage8_buffer_handle_test.cpp
+)
+target_compile_features(stage8_buffer_handle_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage8_buffer_handle_test
+  PRIVATE asyncdataloader_buffer
+)
+
+add_executable(stage8_buffer_pool_backpressure_test
+  tests/stage8_buffer_pool_backpressure_test.cpp
+)
+target_compile_features(
+  stage8_buffer_pool_backpressure_test
+  PRIVATE cxx_std_20
+)
+target_link_libraries(
+  stage8_buffer_pool_backpressure_test
+  PRIVATE asyncdataloader_buffer
+)
+
+add_executable(stage8_spsc_queue_test
+  tests/stage8_spsc_queue_test.cpp
+)
+target_compile_features(stage8_spsc_queue_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage8_spsc_queue_test
+  PRIVATE asyncdataloader_buffer
+)
+
+add_executable(stage8_backpressure_demo
+  examples/stage8_backpressure_demo.cpp
+)
+target_compile_features(stage8_backpressure_demo PRIVATE cxx_std_20)
+target_link_libraries(
+  stage8_backpressure_demo
+  PRIVATE asyncdataloader_buffer
+)
+
 enable_testing()
 
 add_test(
@@ -452,4 +533,49 @@ add_test(
     ${CMAKE_COMMAND}
     -D EXECUTABLE_PATH=$<TARGET_FILE:stage7_custom_stage_demo>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage7_custom_stage_demo_test.cmake
+)
+
+add_test(
+  NAME stage8_pipeline_config
+  COMMAND stage8_pipeline_config_test
+)
+
+add_test(
+  NAME stage8_aligned_buffer
+  COMMAND stage8_aligned_buffer_test
+)
+
+add_test(
+  NAME stage8_buffer_handle
+  COMMAND stage8_buffer_handle_test
+)
+
+add_test(
+  NAME stage8_buffer_pool_backpressure
+  COMMAND stage8_buffer_pool_backpressure_test
+)
+set_tests_properties(
+  stage8_buffer_pool_backpressure
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage8_spsc_queue
+  COMMAND stage8_spsc_queue_test
+)
+set_tests_properties(
+  stage8_spsc_queue
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage8_backpressure_demo
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage8_backpressure_demo>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage8_backpressure_demo_test.cmake
+)
+set_tests_properties(
+  stage8_backpressure_demo
+  PROPERTIES TIMEOUT 10
 )

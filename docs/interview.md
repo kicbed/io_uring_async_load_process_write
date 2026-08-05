@@ -421,3 +421,79 @@ Interview-ready short version:
 > establishes the extensible CPU-processing boundary; bounded BufferPool
 > handoff and end-to-end read/process/write overlap are deliberately later
 > stages.
+
+## Stage 8: BufferPool, Configuration, and Backpressure
+
+### Why are both a BufferPool and an SPSC queue needed?
+
+They control different resources. The pool bounds and reuses physical block
+memory across the whole pipeline. The queue bounds how many completed blocks
+may wait between two adjacent stages and preserves FIFO handoff. The queue
+stores small move-only handles, not copies of the block bytes.
+
+### Why is `BufferHandle` move-only?
+
+One active lease must have one logical owner. Copying a handle would allow two
+destructors to return the same slot. Moving transfers the pool pointer and
+index, then clears the source, so only the destination can return the lease.
+
+### How does automatic buffer return work?
+
+`BufferHandle::~BufferHandle()` calls its private release helper. That helper
+clears the handle first and asks the pool to mark the index available. Clearing
+first makes repeated cleanup of a moved-from or already-released handle a
+no-op. The physical allocation remains owned by the pool and is freed only
+when the pool itself is destroyed.
+
+### How does blocking backpressure work?
+
+`AlignedBufferPool::acquire()` waits while the free-index list is empty.
+`SPSCQueue::push()` waits while the ring is full, and `pop()` waits while it is
+empty. Condition-variable predicates handle spurious wakeups. A consumer
+return or pop updates protected state and notifies one waiting producer.
+
+### Why is the queue implemented as a ring?
+
+Its vector is allocated once at the configured capacity. `head_` and `tail_`
+wrap and reuse old slots, so FIFO operations do not shift elements or grow an
+unbounded container. The first implementation uses a mutex and condition
+variables; SPSC describes the usage contract, not a lock-free performance
+claim.
+
+### What is the Stage 8 memory bound?
+
+Payload memory is exactly:
+
+```text
+block_size * max_inflight_buffers
+```
+
+plus fixed allocator, pool, thread, and queue metadata. Queue slots hold
+handles, so increasing input-file size does not allocate one new block per
+input block. End-to-end RSS still needs to be measured after Stage 10
+integration.
+
+### Is a 4096-byte aligned allocation enough for `O_DIRECT`?
+
+Not universally. Direct I/O may constrain buffer address, request length, and
+file offset, and the values vary by filesystem and kernel. `statx()` with
+`STATX_DIOALIGN` can report requirements when supported. Stage 8 prepares
+aligned storage; the future I/O path must still validate offsets, partial
+blocks, support, and fallback behavior.
+
+### What does the backpressure demo prove?
+
+With two pool buffers and one queue slot, the first handle fills the queue and
+the second producer push cannot complete until the consumer pops. Markers are
+consumed in FIFO order, and both handles return to the pool by RAII.
+
+It does not prove real read/process/write overlap, large-file RSS, ordered
+output, reliable persistence, metrics, or performance. Those remain explicit
+later stages.
+
+Interview-ready short version:
+
+> I bounded physical memory with a fixed aligned BufferPool and transferred
+> move-only RAII leases through a fixed-capacity SPSC ring. Pool exhaustion and
+> queue exhaustion block upstream work, so a slow consumer creates real
+> backpressure without copying blocks or letting memory grow with file size.
