@@ -11,13 +11,22 @@
 #include <optional>
 #include <vector>
 
+namespace asyncdataloader::metrics {
+class Gauge;
+}  // namespace asyncdataloader::metrics
+
 namespace asyncdataloader::buffer {
 
 // The pool must outlive every BufferHandle it creates. All threads using the
-// pool must be stopped and joined before the pool is destroyed.
+// pool must be stopped and joined before the pool is destroyed. An optional
+// inflight Gauge is borrowed and must outlive the pool.
 class AlignedBufferPool {
 public:
     explicit AlignedBufferPool(const config::PipelineConfig& config);
+    AlignedBufferPool(
+        const config::PipelineConfig& config,
+        metrics::Gauge& inflight_buffers
+    );
     ~AlignedBufferPool() noexcept;
 
     AlignedBufferPool(const AlignedBufferPool&) = delete;
@@ -45,6 +54,7 @@ private:
     std::vector<std::uint8_t> in_use_;
     mutable std::mutex mutex_;
     std::condition_variable available_cv_;
+    metrics::Gauge* inflight_metric_{nullptr};
 };
 
 }  // namespace asyncdataloader::buffer

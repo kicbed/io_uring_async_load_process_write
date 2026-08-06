@@ -370,6 +370,90 @@ target_link_libraries(
   PRIVATE asyncdataloader_buffer
 )
 
+add_library(asyncdataloader_metrics
+  src/metrics/counter.cpp
+  src/metrics/gauge.cpp
+  src/metrics/histogram.cpp
+  src/metrics/metrics_registry.cpp
+  src/metrics/scoped_timer.cpp
+)
+target_compile_features(asyncdataloader_metrics PUBLIC cxx_std_20)
+target_include_directories(
+  asyncdataloader_metrics
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(
+  asyncdataloader_pipeline
+  PUBLIC asyncdataloader_metrics
+)
+target_link_libraries(
+  asyncdataloader_buffer
+  PUBLIC asyncdataloader_metrics
+)
+
+add_executable(stage9_counter_test
+  tests/stage9_counter_test.cpp
+)
+target_compile_features(stage9_counter_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage9_counter_test
+  PRIVATE asyncdataloader_metrics Threads::Threads
+)
+
+add_executable(stage9_gauge_test
+  tests/stage9_gauge_test.cpp
+)
+target_compile_features(stage9_gauge_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage9_gauge_test
+  PRIVATE asyncdataloader_metrics Threads::Threads
+)
+
+add_executable(stage9_histogram_test
+  tests/stage9_histogram_test.cpp
+)
+target_compile_features(stage9_histogram_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage9_histogram_test
+  PRIVATE asyncdataloader_metrics Threads::Threads
+)
+
+add_executable(stage9_metrics_registry_test
+  tests/stage9_metrics_registry_test.cpp
+)
+target_compile_features(stage9_metrics_registry_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage9_metrics_registry_test
+  PRIVATE asyncdataloader_metrics
+)
+
+add_executable(stage9_scoped_timer_test
+  tests/stage9_scoped_timer_test.cpp
+)
+target_compile_features(stage9_scoped_timer_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage9_scoped_timer_test
+  PRIVATE asyncdataloader_metrics Threads::Threads
+)
+
+add_executable(stage9_stage_timing_test
+  tests/stage9_stage_timing_test.cpp
+)
+target_compile_features(stage9_stage_timing_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage9_stage_timing_test
+  PRIVATE asyncdataloader_pipeline
+)
+
+add_executable(stage9_metrics_snapshot_test
+  tests/stage9_metrics_snapshot_test.cpp
+)
+target_compile_features(stage9_metrics_snapshot_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage9_metrics_snapshot_test
+  PRIVATE asyncdataloader_buffer
+)
+
 enable_testing()
 
 add_test(
@@ -577,5 +661,68 @@ add_test(
 )
 set_tests_properties(
   stage8_backpressure_demo
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage9_counter
+  COMMAND stage9_counter_test
+)
+set_tests_properties(
+  stage9_counter
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage9_gauge
+  COMMAND stage9_gauge_test
+)
+set_tests_properties(
+  stage9_gauge
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage9_histogram
+  COMMAND stage9_histogram_test
+)
+set_tests_properties(
+  stage9_histogram
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage9_metrics_registry
+  COMMAND stage9_metrics_registry_test
+)
+set_tests_properties(
+  stage9_metrics_registry
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage9_scoped_timer
+  COMMAND stage9_scoped_timer_test
+)
+set_tests_properties(
+  stage9_scoped_timer
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage9_stage_timing
+  COMMAND stage9_stage_timing_test
+)
+set_tests_properties(
+  stage9_stage_timing
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage9_metrics_snapshot
+  COMMAND stage9_metrics_snapshot_test
+)
+set_tests_properties(
+  stage9_metrics_snapshot
   PROPERTIES TIMEOUT 10
 )

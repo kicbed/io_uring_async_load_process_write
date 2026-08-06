@@ -497,3 +497,120 @@ Interview-ready short version:
 > move-only RAII leases through a fixed-capacity SPSC ring. Pool exhaustion and
 > queue exhaustion block upstream work, so a slow consumer creates real
 > backpressure without copying blocks or letting memory grow with file size.
+
+## Stage 9: Metrics Data Structures and Instrumentation
+
+### Why use three metric types?
+
+They preserve different information:
+
+- a Counter answers how many blocks or bytes have completed in total;
+- a Gauge answers how many buffers or queue entries exist now and records the
+  peak pressure;
+- a Histogram answers how latency samples are distributed rather than hiding
+  variation behind one average.
+
+A throughput rate is not a fourth stored primitive here. A reporter can sample
+a bytes Counter twice and divide its delta by measured elapsed time. Stage 9
+provides the safe inputs; later end-to-end stages provide the real byte events
+and reporting interval.
+
+### Why is MetricsRegistry not a singleton?
+
+The application owns and injects it. This makes lifetime and dependencies
+visible, allows isolated registries in tests or separate pipeline instances,
+and avoids hidden global state leaking between runs. Pipeline and BufferPool
+borrow metric references, so the registry must outlive those borrowers.
+
+### Why use small entry vectors instead of unordered_map?
+
+The registry is capped at 64 metrics, and lookup or registration is not the
+per-block hot path. A short linear scan is simple, iteration order is stable,
+and it avoids hash buckets and their extra allocations. Each metric itself is
+heap-owned by `unique_ptr`, so references remain stable if an entry vector
+reallocates. If measured production cardinality later made lookup hot, the
+container could change without changing the metric API.
+
+### How does the fixed Histogram choose a bucket?
+
+For bounds `[20, 50]`, the exclusive buckets are:
+
+```text
+sample <= 20       -> bucket 0
+20 < sample <= 50  -> bucket 1
+sample > 50        -> bucket 2 (overflow)
+```
+
+`lower_bound` returns the first upper bound greater than or equal to the sample.
+If no such bound exists, it returns `end()`; that iterator's index equals the
+finite-bucket count, deliberately selecting the following overflow bucket.
+Every observation updates both its bucket and the total count/sum, preserving
+both distribution and aggregate information without storing every sample.
+
+### Why is ScopedTimer based on RAII?
+
+The constructor stores a `steady_clock` start time and the destructor observes
+the elapsed nanoseconds. Putting one timer directly around each
+`Stage::process()` call gives one measurement per stage. If processing throws,
+stack unwinding still runs the destructor, so the failed call's elapsed time is
+recorded and later stages remain unexecuted.
+
+`steady_clock` is used because elapsed time must not follow wall-clock changes.
+The timer is non-copyable and non-movable so one scope produces exactly one
+observation.
+
+### How is a BufferPool lease reflected in the Gauge?
+
+The metric follows lease state rather than C++ object count. A successful
+acquire changes one slot from free to leased and increments the Gauge. Returning
+the lease through BufferHandle RAII changes it back and decrements the Gauge.
+Moving a handle only transfers ownership of the same lease, so it must not
+change the Gauge. A failed `try_acquire()` also makes no change.
+
+The high watermark records the maximum simultaneous number of leased buffers.
+It exposes memory pressure while physical ownership still remains entirely in
+the fixed BufferPool.
+
+### Why can metric atomics use relaxed ordering?
+
+The atomics prevent data races on numeric observations, but metrics are not a
+handoff protocol. A reader must never infer buffer readiness from a Counter or
+Gauge. Queue mutexes, condition variables, and backend completion mechanisms
+publish the actual work. Because metric updates establish no cross-thread data
+dependency, relaxed ordering is sufficient for these totals.
+
+### Is a registry snapshot one exact instant?
+
+Not while workers are updating. Counter values, Gauge current/high watermark,
+and Histogram totals/buckets are separate atomic loads, so an update can occur
+between them. The snapshot is exact after workers quiesce and is a bounded,
+low-overhead operational view while they run. Claiming a transactional snapshot
+would require additional synchronization and could perturb the measured path.
+
+### How are metrics kept bounded?
+
+The registry accepts at most 64 names, each at most 128 bytes. Every Histogram
+has at most 32 finite buckets plus overflow. Snapshots copy only this bounded
+registered set; there is no arbitrary label map and no vector containing one
+sample per block. Metric memory therefore does not grow with input-file size.
+
+### What does Stage 9 prove, and what does it not prove?
+
+It proves reusable bounded metric primitives, stable registry ownership, a
+unified reporting snapshot, automatic CPU-stage timing, and RAII-consistent
+tracking of active BufferPool leases.
+
+It does not yet prove real read/process/write overlap, final queue depth,
+read/write latency, throughput, output ordering, reliable `fsync`/rename, or
+large-file RSS. Those claims require the Stage 10 pipeline and later controlled
+benchmarks. Instrumentation itself is not a performance improvement.
+
+Interview-ready short version:
+
+> I built bounded atomic Counter, Gauge, and fixed-bucket Histogram primitives,
+> then placed them in an injected registry with a unified non-transactional
+> snapshot. RAII timers automatically measure each CPU stage, and BufferPool
+> lease transitions update current and peak in-flight buffers without changing
+> ownership or backpressure. Metric memory is capped and independent of file
+> size; end-to-end throughput claims remain deferred until the real pipeline is
+> measured.

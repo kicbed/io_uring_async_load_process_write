@@ -1,6 +1,9 @@
 #include "buffer/aligned_buffer_pool.h"
 
+#include "metrics/gauge.h"
+
 #include <cassert>
+#include <stdexcept>
 
 namespace asyncdataloader::buffer {
 
@@ -18,6 +21,20 @@ AlignedBufferPool::AlignedBufferPool(const config::PipelineConfig& config) {
     for (std::size_t index = config.max_inflight_buffers; index > 0; --index) {
         available_indices_.push_back(index - 1);
     }
+}
+
+AlignedBufferPool::AlignedBufferPool(
+    const config::PipelineConfig& config,
+    metrics::Gauge& inflight_buffers
+)
+    : AlignedBufferPool(config) {
+    if (inflight_buffers.value() != 0 ||
+        inflight_buffers.high_watermark() != 0) {
+        throw std::invalid_argument(
+            "buffer-pool inflight Gauge must be dedicated and start at zero"
+        );
+    }
+    inflight_metric_ = &inflight_buffers;
 }
 
 AlignedBufferPool::~AlignedBufferPool() noexcept {
@@ -53,6 +70,9 @@ BufferHandle AlignedBufferPool::take_available_locked() noexcept {
     assert(index < in_use_.size());
     assert(in_use_[index] == 0);
     in_use_[index] = 1;
+    if (inflight_metric_ != nullptr) {
+        inflight_metric_->increment();
+    }
 
     return BufferHandle{this, index};
 }
@@ -86,6 +106,9 @@ void AlignedBufferPool::release(std::size_t index) noexcept {
 
         in_use_[index] = 0;
         available_indices_.push_back(index);
+        if (inflight_metric_ != nullptr) {
+            inflight_metric_->decrement();
+        }
     }
     available_cv_.notify_one();
 }

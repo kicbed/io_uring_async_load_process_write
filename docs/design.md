@@ -582,3 +582,176 @@ Stage 8 guarantee and remaining runtime checks.
 - Ordered output, temporary-file persistence, `fsync`, and rename are not
   implemented here.
 - No throughput or direct-I/O performance claim is made.
+
+## Stage 9: Bounded Metrics and Automatic Instrumentation
+
+### Scope
+
+Stage 9 turns important runtime events into small, queryable metric objects:
+
+```text
+pipeline event
+  -> Counter / Gauge / Histogram atomic update
+  -> MetricsRegistry::snapshot()
+  -> independent reporting data
+  -> future terminal or JSON formatter
+```
+
+It establishes the data and instrumentation layer only. It does not create the
+Stage 10 read/process/write scheduler, infer throughput from invented timings,
+or add a dashboard.
+
+### Components and Responsibilities
+
+| Component | Responsibility |
+| --- | --- |
+| `Counter` | Record a monotonically increasing event total. |
+| `Gauge` | Record a signed current value and its lifetime high watermark. |
+| `Histogram` | Place samples into at most 32 finite buckets plus one overflow bucket, while also recording count and sum. |
+| `MetricsRegistry` | Own at most 64 globally unique named metrics and produce one unified snapshot. |
+| `ScopedTimer` | Measure one scope with `steady_clock` and record nanoseconds during RAII destruction. |
+| Instrumented `Pipeline` | Register and update one latency histogram per CPU stage. |
+| Instrumented `AlignedBufferPool` | Track current and peak active BufferHandle leases. |
+
+The three primitive types answer different questions:
+
+```text
+Counter:   how many events have happened?
+Gauge:     how many items exist right now, and what was the peak?
+Histogram: how are many latency samples distributed?
+```
+
+### Registry Ownership and Reporting Flow
+
+The registry is an ordinary injected object rather than a singleton:
+
+```text
+application owns MetricsRegistry
+  |-- owns Counter / Gauge / Histogram objects through unique_ptr
+  |-- Pipeline borrows stable Histogram pointers
+  `-- AlignedBufferPool borrows one dedicated Gauge pointer
+
+worker events update borrowed metric objects
+reporter asks registry for a copied Snapshot
+```
+
+Registration must finish before worker threads begin. Registration itself is
+not concurrent, but the heap-owned metric objects keep stable addresses even
+if an entry vector reallocates. The registry must outlive every Pipeline or
+BufferPool that borrows one of its metrics.
+
+`snapshot()` copies metric names, current numeric values, histogram bounds, and
+bucket totals. The copy is independent: later metric updates cannot mutate an
+older snapshot. This is the terminal-output foundation because a presenter no
+longer has to know which component owns each live metric.
+
+The snapshot is deliberately non-transactional. Its fields are separate atomic
+loads, so concurrent updates can occur between two reads. After workers have
+quiesced, the snapshot is exact; while they are active, it is a low-overhead
+operational view rather than one globally frozen instant.
+
+### Histogram Bucket Semantics
+
+Finite upper bounds are strictly increasing. Each finite bucket includes its
+upper bound, and the final active bucket contains samples above every finite
+bound. For bounds `[20, 50]`:
+
+```text
+bucket 0: sample <= 20
+bucket 1: 20 < sample <= 50
+bucket 2: sample > 50        (overflow)
+```
+
+`std::lower_bound()` finds the first upper bound that is not less than the
+sample. If it returns `end()`, its distance from `begin()` equals the number of
+finite bounds, which is exactly the overflow-bucket index. Updating the bucket
+preserves the distribution; updating only total count and sum would lose the
+ability to distinguish consistently fast work from a mixture of very fast and
+very slow work.
+
+### Automatic CPU Stage Timing
+
+An instrumented Pipeline receives a borrowed `MetricsRegistry` in its
+constructor. When a stage is registered, the Pipeline creates a histogram named
+
+```text
+stage.<registration-index>.<stage-name>.latency_ns
+```
+
+For every `process()` call, a `ScopedTimer` surrounds that stage only:
+
+```text
+create timer
+  -> Stage::process(block)
+  -> timer destructor observes elapsed nanoseconds
+  -> next stage
+```
+
+`std::chrono::steady_clock` is monotonic, so wall-clock adjustments cannot make
+an elapsed duration run backward. RAII also records the elapsed time if a stage
+throws: stack unwinding destroys the timer before the exception reaches the
+caller, while later stages remain skipped as before.
+
+The default Pipeline constructor remains available for Stage 7 callers that do
+not supply a registry. Instrumentation therefore changes observation, not the
+data-processing contract.
+
+### BufferPool In-Flight Instrumentation
+
+An optionally instrumented `AlignedBufferPool` borrows a dedicated Gauge that
+must begin with both current value and high watermark at zero:
+
+```text
+successful acquire
+  -> slot changes free -> leased
+  -> Gauge increment
+
+move BufferHandle
+  -> lease owner changes
+  -> Gauge unchanged
+
+BufferHandle destruction or replacement
+  -> slot changes leased -> free
+  -> Gauge decrement
+```
+
+A failed `try_acquire()` creates no lease and therefore performs no increment.
+The pool serializes free/leased transitions with its existing mutex, so the
+Gauge follows the same state transition that changes the pool. The metric does
+not own the buffer, release it, or provide backpressure; BufferHandle RAII and
+the pool condition variable retain those responsibilities.
+
+### Concurrency and Boundedness
+
+Metric numeric fields use atomic operations so several workers can report
+without a metric-level data race. Relaxed memory ordering is sufficient because
+metrics are observations: no pipeline thread may use a metric update to publish
+or acquire a buffer. Actual handoff synchronization still belongs to the pool,
+queue, backend, and future scheduler.
+
+Observability is bounded by explicit limits:
+
+- one registry owns at most 64 metrics;
+- each metric name is at most 128 bytes;
+- one histogram owns at most 32 finite buckets plus overflow;
+- snapshots copy only the registered bounded set;
+- no unbounded label map or per-block sample vector is used.
+
+These allocations are independent of input-file size. Buffer payload memory
+remains bounded by the Stage 8 pool configuration.
+
+### Current Boundaries
+
+- Automatic instrumentation currently covers CPU-stage latency and active
+  BufferPool leases.
+- Counter, Gauge, Histogram, and registry snapshots are ready for read/write
+  latency, processed-block totals, queue depth, and throughput inputs, but the
+  real events do not exist until the Stage 10 topology is assembled.
+- The Stage 8 teaching queue is not presented as the final pair of
+  read-to-process and process-to-write queues, so Stage 9 does not give it
+  misleading production metric names.
+- A snapshot provides reporting data; terminal refreshing and optional JSON
+  formatting remain Stage 12 presentation work.
+- Metrics do not prove read/process/write overlap, ordered output, reliable
+  persistence, bounded large-file RSS, or performance improvement.
+- No benchmark number is inferred or reported in this stage.
