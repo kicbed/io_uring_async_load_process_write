@@ -8,17 +8,21 @@ The final project is a bounded-memory, observable read-process-write pipeline:
 read raw block -> CPU preprocessing stage -> write processed block
 ```
 
-Current status: Stage 9 is complete. The project now has bounded Counter,
-Gauge, and Histogram primitives; a name-based MetricsRegistry with a unified
-snapshot; RAII timing for registered CPU stages; and BufferPool instrumentation
-for current and peak in-flight leases. Metrics may be updated concurrently
-without becoming synchronization for the pipeline itself.
+Current status: Stage 10 is complete. `preprocess_pipeline_demo` streams a file
+through one reader, one CPU processor, and one writer with two fixed-capacity
+queues and a fixed-size aligned BufferPool. A move-only `BlockWorkItem` carries
+one RAII buffer lease and its offset through the whole path. The built-in
+`ByteIncrementStage` changes every byte modulo 256, and the demo verifies the
+published output in a second bounded streaming pass.
 
-These components establish the observability foundation; they are not yet the
-final read-process-write pipeline. Real read/process/write queue-depth and I/O
-latency instrumentation require the Stage 10 topology. Terminal presentation,
-optional JSON, controlled benchmarks, three-stage overlap, ordered reliable
-output, and large-file acceptance tests remain planned work.
+The demo accepts Auto, io_uring, thread-pool, or synchronous read backends.
+Auto mode preserves the Stage 6 construction-time fallback policy. Runtime
+output exposes progress, measured throughput, read/process/write latency,
+per-Stage latency, queue depths, and current/peak in-flight buffers. Final data
+is written to a same-directory temporary file, file-synced, atomically renamed,
+and followed by a parent-directory fsync. Stage 11 still owns controlled
+performance comparisons and large-file RSS acceptance; these Stage 10 metrics
+are observations, not benchmark claims.
 
 ## Build
 
@@ -54,6 +58,35 @@ bounded registry behavior, automatic stage timing, BufferHandle-aware in-flight
 tracking, and independent registry snapshots. A snapshot is reporting data for
 later terminal or JSON formatting; Stage 9 does not calculate benchmark
 throughput or claim performance improvements.
+
+## Stage 10 End-to-End Demo
+
+```bash
+./build/preprocess_pipeline_demo \
+  /path/to/input.bin \
+  /path/to/output.bin \
+  --backend=auto
+
+./build/preprocess_pipeline_demo \
+  /path/to/input.bin \
+  /path/to/output.bin \
+  --backend=auto \
+  --disable-uring
+```
+
+Useful boundedness controls are `--block-size`, `--buffers`, and
+`--queue-depth`. Run `./build/preprocess_pipeline_demo --help` for the complete
+interface. Explicit backend selection is fail-fast; only Auto mode falls back.
+
+## Stage 10 Tests
+
+```bash
+ctest --test-dir build -R '^stage10_' --output-on-failure
+```
+
+These tests cover work-item ownership, normal/error queue shutdown, RAII lease
+return, the three-thread executor, runtime metrics, exact transformed output,
+forced Auto fallback, and reliable temporary-file publication.
 
 ## Custom Stage Demo
 

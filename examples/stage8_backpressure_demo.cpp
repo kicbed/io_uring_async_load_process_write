@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <future>
 #include <iostream>
+#include <stdexcept>
 #include <utility>
 
 int main() {
@@ -33,13 +34,17 @@ int main() {
         [&pool, &queue, &first_queued, &second_push_started] {
             auto first = pool.acquire();
             first.bytes().front() = static_cast<std::byte>(1);
-            queue.push(std::move(first));
+            if (!queue.push(std::move(first))) {
+                throw std::runtime_error("queue closed during first push");
+            }
             first_queued.set_value();
 
             auto second = pool.acquire();
             second.bytes().front() = static_cast<std::byte>(2);
             second_push_started.set_value();
-            queue.push(std::move(second));
+            if (!queue.push(std::move(second))) {
+                throw std::runtime_error("queue closed during second push");
+            }
         }
     );
 
@@ -51,16 +56,24 @@ int main() {
 
     unsigned int first_marker = 0;
     {
-        BufferHandle first = queue.pop();
-        first_marker = std::to_integer<unsigned int>(first.bytes().front());
+        auto first = queue.pop();
+        if (!first.has_value()) {
+            std::cerr << "queue closed before first marker\n";
+            return 1;
+        }
+        first_marker = std::to_integer<unsigned int>(first->bytes().front());
     }
 
     producer.get();
 
     unsigned int second_marker = 0;
     {
-        BufferHandle second = queue.pop();
-        second_marker = std::to_integer<unsigned int>(second.bytes().front());
+        auto second = queue.pop();
+        if (!second.has_value()) {
+            std::cerr << "queue closed before second marker\n";
+            return 1;
+        }
+        second_marker = std::to_integer<unsigned int>(second->bytes().front());
     }
 
     const std::size_t returned_buffers = pool.available();

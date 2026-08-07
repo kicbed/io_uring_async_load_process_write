@@ -614,3 +614,112 @@ Interview-ready short version:
 > ownership or backpressure. Metric memory is capped and independent of file
 > size; end-to-end throughput claims remain deferred until the real pipeline is
 > measured.
+
+## Stage 10: End-to-End Preprocessing Pipeline
+
+### Why is this no longer just a file loader?
+
+The reader does not return raw blocks to an application. Every non-empty block
+must cross a registered CPU `Pipeline`, the demo's `ByteIncrementStage` changes
+each byte, and only transformed bytes reach the output writer. The demo then
+checks `output[i] == input[i] + 1 modulo 256` in a bounded streaming pass. This
+is a complete data-product path, not a read API with a checksum attached.
+
+### What is the complete function flow?
+
+```text
+main
+  -> BackendFactory::create()
+  -> Pipeline::add_stage(ByteIncrementStage)
+  -> PipelineExecutor::run_file()
+       -> create temporary output
+       -> PipelineExecutor::run()
+            -> writer_loop()
+            -> processor_loop()
+            -> reader_loop()
+       -> fsync(file) -> rename -> fsync(directory)
+  -> bounded output verification
+  -> final metric snapshot
+```
+
+`run()` starts consumers before the producer, then joins all three threads
+before returning or rethrowing the first failure. Starting order improves
+startup behavior; correctness still comes from queue predicates and ownership,
+not from assuming a particular scheduler order.
+
+### What does each BlockWorkItem field do?
+
+- `block_index` identifies the logical block.
+- `file_offset` tells positional write where this block belongs.
+- `valid_bytes` excludes unused capacity in a short final buffer.
+- `BufferHandle` owns the one active lease and returns it by RAII.
+
+The metadata is not the data itself. It is the shipping label attached to one
+pool-owned block while ownership moves reader → queue → processor → queue →
+writer.
+
+### How do three-stage overlap and backpressure coexist?
+
+Separate reader, processor, and writer threads allow different blocks to be in
+different stages simultaneously. Two fixed-capacity queues allow a small,
+bounded distance between stages. If the processor is slow, the first queue
+fills and blocks the reader. If buffers are all leased, pool acquisition also
+blocks. Overlap is allowed, unlimited run-ahead is not.
+
+### Why move a BufferHandle instead of copying a vector?
+
+Moving changes who owns permission to use the pool slot without copying its
+payload. A copyable lease could lead to two destructors returning the same
+slot. The move-only type makes exclusive ownership visible to the compiler and
+keeps memory fixed regardless of input size.
+
+### How do normal EOF and failures differ?
+
+Normal EOF calls `close()`: the consumer drains already queued blocks and then
+gets `nullopt`. A worker exception calls `fail()`: delivery stops, queued items
+are destroyed, blocked threads wake, and all queues rethrow the same first
+exception. Destroying queued work also destroys its handles, so buffers return
+without a hand-written cleanup loop.
+
+### How can one executor work with sync, thread-pool, and io_uring reads?
+
+It depends only on `IOBackend::read_at()` and `wait_one()`. A synchronous task
+is already done after `start()`; an asynchronous task needs completion progress.
+Concrete selection stays in `BackendFactory`. Auto mode is permission to fall
+back, while an explicit backend request remains fail-fast so results are not
+mislabelled.
+
+### Why write to a temporary file first?
+
+Writing directly to the final name exposes a partially processed file if a
+stage fails. The executor writes beside the final path, fsyncs all payload,
+atomically renames it, then fsyncs the parent directory entry. Before rename,
+RAII cleanup unlinks the temporary path and leaves an old final file intact.
+
+### What do the Stage 10 metrics mean?
+
+Counters show how many blocks and bytes completed each stage. Gauges show
+current and peak queue occupancy and active buffer leases. Histograms show
+read, whole-pipeline process, write, and individual Stage latency. Throughput
+is derived from actually written bytes and measured elapsed time. Metrics
+observe state; they never synchronize work or grant buffer ownership.
+
+### What does Stage 10 still not prove?
+
+It does not prove that io_uring is fastest, that coroutines improve speed, or
+that a particular backend wins. It also does not yet provide controlled
+large-file RSS evidence, multi-core out-of-order processing, automated
+`kill -9` acceptance, polished terminal UI, or JSON. Those remain explicit
+Stage 11-13 boundaries.
+
+Interview-ready short version:
+
+> I assembled a bounded three-stage read-process-write pipeline around a fixed
+> aligned BufferPool and two bounded queues. Move-only work items carry one
+> RAII lease plus offset metadata, so a slow downstream stage applies
+> backpressure and memory does not grow with file size. The CPU stage really
+> transforms bytes, output is positionally correct and published through
+> temp-file/fsync/rename/directory-fsync, Auto backend fallback is visible, and
+> live counters, queue depths, in-flight buffers, and stage latencies come from
+> the actual execution path. Performance comparisons are deliberately deferred
+> to controlled benchmarks.

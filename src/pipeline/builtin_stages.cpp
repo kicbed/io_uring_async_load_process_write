@@ -10,6 +10,17 @@ std::string_view NoOpStage::name() const noexcept {
 
 void NoOpStage::process(std::span<std::byte>) {}
 
+std::string_view ByteIncrementStage::name() const noexcept {
+    return "byte_increment";
+}
+
+void ByteIncrementStage::process(std::span<std::byte> block) {
+    for (std::byte& value : block) {
+        const unsigned int numeric = std::to_integer<unsigned int>(value);
+        value = std::byte{static_cast<unsigned char>(numeric + 1U)};
+    }
+}
+
 std::string_view NormalizeStage::name() const noexcept {
     return "normalize";
 }

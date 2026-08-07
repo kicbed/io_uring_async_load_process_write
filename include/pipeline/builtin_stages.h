@@ -14,6 +14,15 @@ public:
     void process(std::span<std::byte> block) override;
 };
 
+// A deterministic, block-boundary-independent preprocessing stage used by the
+// end-to-end demo. Every byte is incremented modulo 256, so output correctness
+// can be checked in a second bounded streaming pass.
+class ByteIncrementStage final : public Stage {
+public:
+    [[nodiscard]] std::string_view name() const noexcept override;
+    void process(std::span<std::byte> block) override;
+};
+
 class NormalizeStage final : public Stage {
 public:
     [[nodiscard]] std::string_view name() const noexcept override;

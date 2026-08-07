@@ -253,8 +253,10 @@ target_link_libraries(
 )
 
 add_library(asyncdataloader_pipeline
+  src/pipeline/block_work_item.cpp
   src/pipeline/builtin_stages.cpp
   src/pipeline/pipeline.cpp
+  src/pipeline/pipeline_executor.cpp
 )
 target_compile_features(asyncdataloader_pipeline PUBLIC cxx_std_20)
 target_include_directories(
@@ -320,6 +322,10 @@ target_include_directories(
 target_link_libraries(
   asyncdataloader_buffer
   PUBLIC asyncdataloader_config Threads::Threads
+)
+target_link_libraries(
+  asyncdataloader_pipeline
+  PUBLIC asyncdataloader_buffer
 )
 
 add_executable(stage8_aligned_buffer_test
@@ -452,6 +458,80 @@ target_compile_features(stage9_metrics_snapshot_test PRIVATE cxx_std_20)
 target_link_libraries(
   stage9_metrics_snapshot_test
   PRIVATE asyncdataloader_buffer
+)
+
+add_executable(stage10_block_work_item_test
+  tests/stage10_block_work_item_test.cpp
+)
+target_compile_features(stage10_block_work_item_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage10_block_work_item_test
+  PRIVATE asyncdataloader_pipeline
+)
+
+add_executable(stage10_queue_lifecycle_test
+  tests/stage10_queue_lifecycle_test.cpp
+)
+target_compile_features(stage10_queue_lifecycle_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage10_queue_lifecycle_test
+  PRIVATE asyncdataloader_pipeline
+)
+
+add_executable(stage10_pipeline_executor_test
+  src/backend/sync_backend.cpp
+  src/backend/thread_pool_backend.cpp
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  tests/stage10_pipeline_executor_test.cpp
+)
+target_compile_features(stage10_pipeline_executor_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage10_pipeline_executor_test
+  PRIVATE asyncdataloader_pipeline
+)
+
+add_executable(stage10_reliable_output_test
+  src/backend/sync_backend.cpp
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  tests/stage10_reliable_output_test.cpp
+)
+target_compile_features(stage10_reliable_output_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage10_reliable_output_test
+  PRIVATE asyncdataloader_pipeline
+)
+
+add_executable(stage10_pipeline_metrics_test
+  src/backend/sync_backend.cpp
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  tests/stage10_pipeline_metrics_test.cpp
+)
+target_compile_features(stage10_pipeline_metrics_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage10_pipeline_metrics_test
+  PRIVATE asyncdataloader_pipeline
+)
+
+add_executable(preprocess_pipeline_demo
+  src/backend/backend_factory.cpp
+  src/backend/sync_backend.cpp
+  src/backend/thread_pool_backend.cpp
+  src/backend/uring_backend.cpp
+  src/coroutine/uring_read_awaiter.cpp
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  examples/preprocess_pipeline_demo.cpp
+)
+target_compile_features(preprocess_pipeline_demo PRIVATE cxx_std_20)
+target_link_libraries(
+  preprocess_pipeline_demo
+  PRIVATE
+    asyncdataloader_pipeline
+    PkgConfig::LIBURING
+    Threads::Threads
 )
 
 enable_testing()
@@ -724,5 +804,62 @@ add_test(
 )
 set_tests_properties(
   stage9_metrics_snapshot
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage10_block_work_item
+  COMMAND stage10_block_work_item_test
+)
+set_tests_properties(
+  stage10_block_work_item
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage10_queue_lifecycle
+  COMMAND stage10_queue_lifecycle_test
+)
+set_tests_properties(
+  stage10_queue_lifecycle
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage10_pipeline_executor
+  COMMAND stage10_pipeline_executor_test
+)
+set_tests_properties(
+  stage10_pipeline_executor
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage10_reliable_output
+  COMMAND stage10_reliable_output_test
+)
+set_tests_properties(
+  stage10_reliable_output
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage10_pipeline_metrics
+  COMMAND stage10_pipeline_metrics_test
+)
+set_tests_properties(
+  stage10_pipeline_metrics
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage10_preprocess_pipeline_demo
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:preprocess_pipeline_demo>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage10_preprocess_pipeline_demo_test.cmake
+)
+set_tests_properties(
+  stage10_preprocess_pipeline_demo
   PROPERTIES TIMEOUT 10
 )

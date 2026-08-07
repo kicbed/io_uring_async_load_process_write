@@ -755,3 +755,180 @@ remains bounded by the Stage 8 pool configuration.
 - Metrics do not prove read/process/write overlap, ordered output, reliable
   persistence, bounded large-file RSS, or performance improvement.
 - No benchmark number is inferred or reported in this stage.
+
+## Stage 10: End-to-End Preprocessing Pipeline
+
+### Scope and Topology
+
+Stage 10 connects the components built in Stages 6-9 into one runnable
+bounded-memory file transformation:
+
+```text
+BackendFactory -> IOBackend
+                     |
+reader thread:  BufferPool::acquire -> read_at(offset)
+                     |
+                     v
+              read_to_process queue
+                     |
+processor thread: Pipeline::process(valid_data)
+                     |
+                     v
+              process_to_write queue
+                     |
+writer thread:  pwrite(valid_data, offset)
+                     |
+                     v
+              BufferHandle destructor -> BufferPool
+```
+
+The three worker threads are started consumer-first. Once warmed up, the
+reader may read block `i+1` while the processor transforms block `i` and the
+writer persists block `i-1`. This is real stage overlap, although Stage 11 must
+still measure how much it helps on controlled workloads.
+
+### Work Item and Ownership
+
+`BlockWorkItem` is the envelope for one logical block. Its fields answer four
+separate questions:
+
+| Field | Meaning |
+| --- | --- |
+| `block_index` | Which logical block this is, for identity and diagnostics. |
+| `file_offset` | Where these bytes belong in the output file. |
+| `valid_bytes` | How much of the fixed-capacity buffer was actually read. |
+| `BufferHandle` | The unique RAII lease that grants access to the pool slot. |
+
+Only `valid_data()` is processed and written. This matters for the final block:
+a 1 MiB buffer may contain only 37 valid bytes at EOF, and stale capacity bytes
+must never reach either CPU processing or output.
+
+The item is move-only because its handle is move-only. Queue `push()` and
+`pop()` transfer the item instead of copying its bytes:
+
+```text
+pool owns allocation
+  -> reader-local BufferHandle owns lease
+  -> read queue slot owns moved BlockWorkItem
+  -> processor-local optional owns it
+  -> write queue slot owns it
+  -> writer-local optional owns it
+  -> destruction returns lease to pool
+```
+
+At no point are two objects allowed to own the same lease.
+
+### Bounded Queues, EOF, and Failure
+
+Both handoff queues are fixed-capacity SPSC rings. A full `push()` blocks the
+upstream stage, so the reader cannot run indefinitely ahead of a slow
+processor or writer. Physical payload memory remains bounded by:
+
+```text
+block_size * max_inflight_buffers
+```
+
+plus fixed queue, metric, thread, and allocator overhead.
+
+`close()` means normal end-of-stream: queued values remain available and the
+consumer receives `nullopt` only after draining them. `fail(exception_ptr)`
+means abnormal termination: it preserves the first exception, destroys queued
+items immediately, returns their buffer leases through RAII, and wakes blocked
+producers and consumers. Every worker is wrapped by the same failure broadcast,
+and the caller receives the original exception after all threads join.
+
+### Backend and Processing Boundaries
+
+The reader drives the Stage 6 backend contract in one place:
+
+```text
+IOBackend::read_at(fd, buffer, offset) -> Task<size_t>
+  -> Task::start()
+  -> while suspended: IOBackend::wait_one()
+  -> Task::result()
+```
+
+For SyncBackend the task completes during `start()`. ThreadPoolBackend and
+UringBackend normally require completion progress through `wait_one()`. The
+pipeline does not branch on concrete backend type.
+
+The processor calls the registered Stage 7 `Pipeline` over only the valid byte
+span. The final demo uses `ByteIncrementStage`, which increments every byte
+modulo 256. It is deliberately deterministic and block-boundary independent,
+so a second bounded pass can prove that output differs from raw input in the
+expected way. The existing `NormalizeStage` remains another real CPU transform.
+
+The writer currently uses robust positional `pwrite()` through
+`write_all_at()`. It retries `EINTR`, completes short writes, and writes at the
+work item's explicit offset. A common asynchronous write backend is not added
+in this stage.
+
+### Runtime Metrics
+
+An instrumented executor registers bounded counters, gauges, and histograms
+before workers start:
+
+```text
+Counters:   read / processed / written blocks and bytes
+Gauges:     two queue depths and active BufferPool leases
+Histograms: total read / process / write latency
+Pipeline:   one existing per-Stage latency histogram
+```
+
+Queue Gauges change under the same mutex-protected transitions that change
+queue size. Failure resets current depth to zero while retaining the peak.
+The BufferPool Gauge follows lease acquisition and RAII return. Total process
+latency surrounds the whole stage chain; the nested Stage histogram explains
+the cost of each registered transformation.
+
+`preprocess_pipeline_demo` may sample these atomics while workers run and print
+plain status lines. The final snapshot is exact after the workers stop. Its
+throughput is bytes written divided by measured pipeline-and-commit elapsed
+time; it is one run's observation, not a benchmark comparison.
+
+### Reliable Publication
+
+`PipelineExecutor::run_file()` never writes directly into the advertised final
+path:
+
+```text
+open input
+  -> reject same input/output inode
+  -> mkstemp beside final output
+  -> stream read/process/write into temporary file
+  -> fsync temporary file
+  -> rename temporary path over final path
+  -> fsync parent directory
+```
+
+Before `rename()`, any exception unlinks the temporary file and preserves an
+existing final output. `rename()` is atomic because temporary and final paths
+share a directory. File fsync makes payload data durable before publication;
+directory fsync asks the filesystem to persist the renamed directory entry.
+If the final directory fsync itself fails after a successful rename, the new
+name may already be visible and the caller receives an error because crash
+durability could not be confirmed.
+
+### Demo and Verification
+
+The CLI accepts `auto`, `uring`, `threadpool`, and `sync`. Explicit choices are
+fail-fast. Auto mode may fall back from io_uring to the bounded thread pool and
+finally sync, and the selected backend is printed rather than hidden.
+
+After publication, the demo opens input and output and compares them one fixed
+block at a time using the `+1 modulo 256` rule. This validation uses two
+reusable verification blocks and therefore does not load either file in full.
+
+### Current Boundaries
+
+- Large-file RSS under a memory limit, controlled overlap evidence, and backend
+  performance comparisons belong to Stage 11; no Stage 10 timing is promoted
+  into a benchmark claim.
+- Stage 12 may improve terminal presentation and optionally add JSON. Stage 10
+  uses simple periodic text lines only.
+- The processor currently has one worker and preserves FIFO order. Multi-core
+  out-of-order processing and T5 acceptance are not claimed.
+- The temp/fsync/rename mechanism is implemented, but automated `kill -9`
+  crash testing remains Stage 13.
+- TSan-instrumented binaries compile here, but this WSL runtime aborts before
+  project code with `unexpected memory mapping`; no TSan-safety claim is made.
