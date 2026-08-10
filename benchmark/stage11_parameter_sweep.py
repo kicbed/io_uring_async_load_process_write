@@ -425,7 +425,11 @@ def write_csv_atomic(path: Path, rows: list[dict[str, object]]) -> None:
     temporary_path = Path(temporary_file.name)
     try:
         with temporary_file:
-            writer = csv.DictWriter(temporary_file, fieldnames=CSV_FIELDS)
+            writer = csv.DictWriter(
+                temporary_file,
+                fieldnames=CSV_FIELDS,
+                lineterminator="\n",
+            )
             writer.writeheader()
             writer.writerows(rows)
             temporary_file.flush()

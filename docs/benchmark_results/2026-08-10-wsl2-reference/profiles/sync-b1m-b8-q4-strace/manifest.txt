@@ -1,0 +1,14 @@
+format=asyncdataloader-stage11-profile-v1
+status=complete
+label=sync-b1m-b8-q4-strace
+environment_id=wsl2-i7-12800hx-ext4-release-3ba60cd-20260810
+captured_at_utc=2026-08-10T04:17:00.300595+00:00
+working_directory=/root/projects/project/io_uring_async_load_process_write
+tool=strace
+profiler_executable=/usr/bin/strace
+command=/root/projects/project/io_uring_async_load_process_write/build-release/preprocess_pipeline_demo /tmp/asyncdataloader-stage11-reference-3ba60cd/input-256m.bin /tmp/asyncdataloader-stage11-reference-3ba60cd/outputs/sync-profile.bin --backend=sync --block-size=1048576 --buffers=8 --queue-depth=4 --thread-workers=2 --report-ms=0
+profiler_command=/usr/bin/strace -f -c -o /tmp/asyncdataloader-stage11-reference-3ba60cd/profiles/.sync-b1m-b8-q4-strace.tmp.8_wr_otr/strace-summary.txt -- /root/projects/project/io_uring_async_load_process_write/build-release/preprocess_pipeline_demo /tmp/asyncdataloader-stage11-reference-3ba60cd/input-256m.bin /tmp/asyncdataloader-stage11-reference-3ba60cd/outputs/sync-profile.bin --backend=sync --block-size=1048576 --buffers=8 --queue-depth=4 --thread-workers=2 --report-ms=0
+exit_code=0
+profile_output_present=true
+timing_scope=diagnostic_only_not_benchmark_csv
+note=profilers perturb execution; use this evidence only to explain a separately recorded benchmark observation

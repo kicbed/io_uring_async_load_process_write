@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="272" viewBox="0 0 1080 272" role="img">
+  <title>AsyncDataLoader WSL2 Bounded RSS Scale Reference: whole-process peak RSS</title>
+  <rect width="100%" height="100%" fill="white"/>
+  <style>text { font-family: sans-serif; fill: #1f2937; } .label { font-size: 11px; } .value { font-size: 11px; font-weight: 600; }</style>
+  <text x="12" y="27" font-size="18" font-weight="700">AsyncDataLoader WSL2 Bounded RSS Scale Reference: whole-process peak RSS</text>
+  <text x="410" y="45" font-size="10">gray = BufferPool payload, colored = process RSS</text>
+  <rect x="410" y="58" width="530.0" height="8" fill="#cbd5e1"/>
+  <text class="label" x="6" y="80">input-1g.bin | Auto-&gt;io_uring | block=8.00 MiB | buffers=24 | queue=8</text>
+  <rect x="410" y="69" width="429.8" height="12" rx="2" fill="#0891b2"/>
+  <text class="value" x="844.8" y="80">155.715 MiB</text>
+  <rect x="410" y="96" width="530.0" height="8" fill="#cbd5e1"/>
+  <text class="label" x="6" y="118">input-256m.bin | Auto-&gt;io_uring | block=8.00 MiB | buffers=24 | queue=8</text>
+  <rect x="410" y="107" width="275.7" height="12" rx="2" fill="#0891b2"/>
+  <text class="value" x="690.7" y="118">99.859 MiB</text>
+  <rect x="410" y="134" width="530.0" height="8" fill="#cbd5e1"/>
+  <text class="label" x="6" y="156">input-2g.bin | Auto-&gt;io_uring | block=8.00 MiB | buffers=24 | queue=8</text>
+  <rect x="410" y="145" width="429.9" height="12" rx="2" fill="#0891b2"/>
+  <text class="value" x="844.9" y="156">155.734 MiB</text>
+  <rect x="410" y="172" width="530.0" height="8" fill="#cbd5e1"/>
+  <text class="label" x="6" y="194">input-4g.bin | Auto-&gt;io_uring | block=8.00 MiB | buffers=24 | queue=8</text>
+  <rect x="410" y="183" width="429.9" height="12" rx="2" fill="#0891b2"/>
+  <text class="value" x="844.9" y="194">155.727 MiB</text>
+  <rect x="410" y="210" width="530.0" height="8" fill="#cbd5e1"/>
+  <text class="label" x="6" y="232">input-64m.bin | Auto-&gt;io_uring | block=8.00 MiB | buffers=24 | queue=8</text>
+  <rect x="410" y="221" width="143.1" height="12" rx="2" fill="#0891b2"/>
+  <text class="value" x="558.1" y="232">51.855 MiB</text>
+</svg>

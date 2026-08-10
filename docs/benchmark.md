@@ -13,11 +13,20 @@ parameter sweep that records pipeline metrics and GNU `time` peak RSS. Stage
 third-party plotting dependency, and generates an evidence-bounded report.
 Stage 11.5 captures reproducible `strace -f -c` or `perf stat` evidence for one
 exact command while keeping profiler-distorted timing outside benchmark data.
+Stage 11.6 archives one real WSL2 reference campaign with raw results,
+generated analysis, system evidence, environment, commands, and explicit
+acceptance boundaries.
 
-No official performance result has been collected yet. Tiny CTest inputs
-verify behavior only; their timings are not benchmark data.
+One same-machine reference result has now been collected from the exact Release
+commit. See the
+[2026-08-10 WSL2 reference campaign](benchmark_results/2026-08-10-wsl2-reference/README.md).
+Its 24 exact parameter groups do not show a universal backend winner, and its
+1-4 GiB scale rows show an approximately 155.7 MiB RSS plateau under the
+recorded configuration. Tiny CTest inputs still verify behavior only; their
+timings are not benchmark data.
 
-Official results still require recorded Release runs on declared environments.
+Cross-machine conclusions and formal T1/T1b acceptance still require recorded
+Release runs on the declared 50/200 GiB inputs and suitable environments.
 
 ## Workload Families
 
@@ -441,6 +450,11 @@ raw_csv_path:
 ```
 
 ## Result Record Templates
+
+These blank tables remain reusable for another machine or cache policy. The
+filled WSL2 evidence is archived in the
+[2026-08-10 reference bundle](benchmark_results/2026-08-10-wsl2-reference/README.md)
+rather than hand-copied into these templates.
 
 Comparable read-only scans:
 

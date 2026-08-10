@@ -8,7 +8,7 @@ The final project is a bounded-memory, observable read-process-write pipeline:
 read raw block -> CPU preprocessing stage -> write processed block
 ```
 
-Current status: Stage 10 is complete and Stage 11 is in progress.
+Current status: Stage 11 is complete and Stage 12 is next.
 `preprocess_pipeline_demo` streams a file through one reader, one CPU
 processor, and one writer with two fixed-capacity queues and a fixed-size
 aligned BufferPool. A move-only `BlockWorkItem` carries one RAII buffer lease
@@ -29,8 +29,10 @@ while recording each child process's peak RSS. Stage 11.4 validates and groups
 those raw samples, then produces a summary CSV, two dependency-free SVG charts,
 and an evidence-bounded Markdown report. Stage 11.5 captures an exact command's
 `strace -f -c` or `perf stat` output without mixing profiler-distorted timing
-into benchmark CSV. Controlled large-file results and RSS acceptance still
-require real recorded runs; functional-test timings are not benchmark claims.
+into benchmark CSV. Stage 11.6 archives one real WSL2 reference campaign with
+raw CSV, charts, environment, commands, bounded-RSS observations, and honest
+profiler limitations. Formal 50/200 GiB acceptance is still unclaimed;
+functional-test timings are not benchmark claims.
 
 ## Build
 
@@ -204,6 +206,17 @@ Each invocation really runs the pipeline once. The new evidence directory
 contains the exact command, profiler output, child stdout/stderr, and status.
 Existing evidence is never overwritten. Profiled wall time is diagnostic and
 must not be copied into the Stage 11.3 benchmark CSV.
+
+## Stage 11.6 Recorded Reference Result
+
+The archived [WSL2 reference campaign](docs/benchmark_results/2026-08-10-wsl2-reference/README.md)
+contains the exact environment, reproduction commands, raw samples, generated
+CSV/SVG/Markdown analysis, strace evidence, and the retained perf-unavailable
+failure. Its 24 exact parameter groups had no universal backend winner. With a
+192 MiB configured BufferPool payload, observed whole-process RSS plateaued at
+about 155.7 MiB for 1-4 GiB inputs and every row passed output and configured
+bound checks. This is bounded-memory evidence, not a substitute for the still
+unrun 50/200 GiB T1/T1b acceptance campaign.
 
 ## Custom Stage Demo
 

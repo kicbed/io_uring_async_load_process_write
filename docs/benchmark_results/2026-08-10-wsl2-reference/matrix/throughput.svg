@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="802" viewBox="0 0 1080 802" role="img">
+  <title>AsyncDataLoader WSL2 256 MiB Reference Matrix: observed aggregate throughput</title>
+  <rect width="100%" height="100%" fill="white"/>
+  <style>text { font-family: sans-serif; fill: #1f2937; } .label { font-size: 11px; } .value { font-size: 11px; font-weight: 600; }</style>
+  <text x="12" y="27" font-size="18" font-weight="700">AsyncDataLoader WSL2 256 MiB Reference Matrix: observed aggregate throughput</text>
+  <text class="label" x="6" y="71">Sync | block=1.00 MiB | buffers=3 | queue=1</text>
+  <rect x="410" y="58" width="499.0" height="17" rx="2" fill="#64748b"/>
+  <text class="value" x="914.0" y="71">1696.369 MiB/s</text>
+  <text class="label" x="6" y="101">ThreadPool | block=1.00 MiB | buffers=3 | queue=1</text>
+  <rect x="410" y="88" width="478.9" height="17" rx="2" fill="#2563eb"/>
+  <text class="value" x="893.9" y="101">1628.006 MiB/s</text>
+  <text class="label" x="6" y="131">io_uring | block=1.00 MiB | buffers=3 | queue=1</text>
+  <rect x="410" y="118" width="486.9" height="17" rx="2" fill="#7c3aed"/>
+  <text class="value" x="901.9" y="131">1655.338 MiB/s</text>
+  <text class="label" x="6" y="161">Sync | block=1.00 MiB | buffers=3 | queue=4</text>
+  <rect x="410" y="148" width="131.4" height="17" rx="2" fill="#64748b"/>
+  <text class="value" x="546.4" y="161">446.641 MiB/s</text>
+  <text class="label" x="6" y="191">ThreadPool | block=1.00 MiB | buffers=3 | queue=4</text>
+  <rect x="410" y="178" width="57.4" height="17" rx="2" fill="#2563eb"/>
+  <text class="value" x="472.4" y="191">195.298 MiB/s</text>
+  <text class="label" x="6" y="221">io_uring | block=1.00 MiB | buffers=3 | queue=4</text>
+  <rect x="410" y="208" width="526.9" height="17" rx="2" fill="#7c3aed"/>
+  <text class="value" x="941.9" y="221">1791.410 MiB/s</text>
+  <text class="label" x="6" y="251">Sync | block=1.00 MiB | buffers=8 | queue=1</text>
+  <rect x="410" y="238" width="84.5" height="17" rx="2" fill="#64748b"/>
+  <text class="value" x="499.5" y="251">287.133 MiB/s</text>
+  <text class="label" x="6" y="281">ThreadPool | block=1.00 MiB | buffers=8 | queue=1</text>
+  <rect x="410" y="268" width="78.2" height="17" rx="2" fill="#2563eb"/>
+  <text class="value" x="493.2" y="281">265.944 MiB/s</text>
+  <text class="label" x="6" y="311">io_uring | block=1.00 MiB | buffers=8 | queue=1</text>
+  <rect x="410" y="298" width="530.0" height="17" rx="2" fill="#7c3aed"/>
+  <text class="value" x="945.0" y="311">1801.804 MiB/s</text>
+  <text class="label" x="6" y="341">Sync | block=1.00 MiB | buffers=8 | queue=4</text>
+  <rect x="410" y="328" width="507.9" height="17" rx="2" fill="#64748b"/>
+  <text class="value" x="922.9" y="341">1726.803 MiB/s</text>
+  <text class="label" x="6" y="371">ThreadPool | block=1.00 MiB | buffers=8 | queue=4</text>
+  <rect x="410" y="358" width="493.3" height="17" rx="2" fill="#2563eb"/>
+  <text class="value" x="908.3" y="371">1677.206 MiB/s</text>
+  <text class="label" x="6" y="401">io_uring | block=1.00 MiB | buffers=8 | queue=4</text>
+  <rect x="410" y="388" width="506.5" height="17" rx="2" fill="#7c3aed"/>
+  <text class="value" x="921.5" y="401">1721.800 MiB/s</text>
+  <text class="label" x="6" y="431">Sync | block=4.00 MiB | buffers=3 | queue=1</text>
+  <rect x="410" y="418" width="460.7" height="17" rx="2" fill="#64748b"/>
+  <text class="value" x="875.7" y="431">1566.339 MiB/s</text>
+  <text class="label" x="6" y="461">ThreadPool | block=4.00 MiB | buffers=3 | queue=1</text>
+  <rect x="410" y="448" width="56.1" height="17" rx="2" fill="#2563eb"/>
+  <text class="value" x="471.1" y="461">190.568 MiB/s</text>
+  <text class="label" x="6" y="491">io_uring | block=4.00 MiB | buffers=3 | queue=1</text>
+  <rect x="410" y="478" width="131.8" height="17" rx="2" fill="#7c3aed"/>
+  <text class="value" x="546.8" y="491">448.017 MiB/s</text>
+  <text class="label" x="6" y="521">Sync | block=4.00 MiB | buffers=3 | queue=4</text>
+  <rect x="410" y="508" width="435.3" height="17" rx="2" fill="#64748b"/>
+  <text class="value" x="850.3" y="521">1479.707 MiB/s</text>
+  <text class="label" x="6" y="551">ThreadPool | block=4.00 MiB | buffers=3 | queue=4</text>
+  <rect x="410" y="538" width="440.0" height="17" rx="2" fill="#2563eb"/>
+  <text class="value" x="855.0" y="551">1495.841 MiB/s</text>
+  <text class="label" x="6" y="581">io_uring | block=4.00 MiB | buffers=3 | queue=4</text>
+  <rect x="410" y="568" width="472.3" height="17" rx="2" fill="#7c3aed"/>
+  <text class="value" x="887.3" y="581">1605.759 MiB/s</text>
+  <text class="label" x="6" y="611">Sync | block=4.00 MiB | buffers=8 | queue=1</text>
+  <rect x="410" y="598" width="304.9" height="17" rx="2" fill="#64748b"/>
+  <text class="value" x="719.9" y="611">1036.382 MiB/s</text>
+  <text class="label" x="6" y="641">ThreadPool | block=4.00 MiB | buffers=8 | queue=1</text>
+  <rect x="410" y="628" width="452.1" height="17" rx="2" fill="#2563eb"/>
+  <text class="value" x="867.1" y="641">1537.118 MiB/s</text>
+  <text class="label" x="6" y="671">io_uring | block=4.00 MiB | buffers=8 | queue=1</text>
+  <rect x="410" y="658" width="46.0" height="17" rx="2" fill="#7c3aed"/>
+  <text class="value" x="461.0" y="671">156.296 MiB/s</text>
+  <text class="label" x="6" y="701">Sync | block=4.00 MiB | buffers=8 | queue=4</text>
+  <rect x="410" y="688" width="457.8" height="17" rx="2" fill="#64748b"/>
+  <text class="value" x="872.8" y="701">1556.449 MiB/s</text>
+  <text class="label" x="6" y="731">ThreadPool | block=4.00 MiB | buffers=8 | queue=4</text>
+  <rect x="410" y="718" width="482.0" height="17" rx="2" fill="#2563eb"/>
+  <text class="value" x="897.0" y="731">1638.509 MiB/s</text>
+  <text class="label" x="6" y="761">io_uring | block=4.00 MiB | buffers=8 | queue=4</text>
+  <rect x="410" y="748" width="412.9" height="17" rx="2" fill="#7c3aed"/>
+  <text class="value" x="827.9" y="761">1403.740 MiB/s</text>
+</svg>
