@@ -13,6 +13,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 pkg_check_modules(LIBURING REQUIRED IMPORTED_TARGET liburing)
 
 add_executable(asyncdataloader_stage0 src/main.cpp)
@@ -534,6 +535,67 @@ target_link_libraries(
     Threads::Threads
 )
 
+add_library(asyncdataloader_stage11_benchmark
+  src/benchmark/end_to_end_baseline.cpp
+)
+target_compile_features(asyncdataloader_stage11_benchmark PUBLIC cxx_std_20)
+target_include_directories(
+  asyncdataloader_stage11_benchmark
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(
+  asyncdataloader_stage11_benchmark
+  PUBLIC asyncdataloader_pipeline
+)
+
+add_executable(stage11_end_to_end_baseline_test
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/util/timer.cpp
+  tests/stage11_end_to_end_baseline_test.cpp
+)
+target_compile_features(stage11_end_to_end_baseline_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage11_end_to_end_baseline_test
+  PRIVATE asyncdataloader_stage11_benchmark
+)
+
+add_executable(stage11_bench_end_to_end
+  src/backend/sync_backend.cpp
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/util/timer.cpp
+  benchmark/stage11_bench_end_to_end.cpp
+)
+target_compile_features(stage11_bench_end_to_end PRIVATE cxx_std_20)
+target_link_libraries(
+  stage11_bench_end_to_end
+  PRIVATE
+    asyncdataloader_stage11_benchmark
+    asyncdataloader_benchmark
+)
+
+add_executable(stage11_bench_backends
+  src/backend/backend_factory.cpp
+  src/backend/sync_backend.cpp
+  src/backend/thread_pool_backend.cpp
+  src/backend/uring_backend.cpp
+  src/coroutine/uring_read_awaiter.cpp
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/util/timer.cpp
+  benchmark/stage11_bench_backends.cpp
+)
+target_compile_features(stage11_bench_backends PRIVATE cxx_std_20)
+target_link_libraries(
+  stage11_bench_backends
+  PRIVATE
+    asyncdataloader_stage11_benchmark
+    asyncdataloader_benchmark
+    PkgConfig::LIBURING
+    Threads::Threads
+)
+
 enable_testing()
 
 add_test(
@@ -861,5 +923,81 @@ add_test(
 )
 set_tests_properties(
   stage10_preprocess_pipeline_demo
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage11_end_to_end_baseline
+  COMMAND stage11_end_to_end_baseline_test
+)
+set_tests_properties(
+  stage11_end_to_end_baseline
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage11_bench_end_to_end
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage11_bench_end_to_end>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage11_bench_end_to_end_test.cmake
+)
+set_tests_properties(
+  stage11_bench_end_to_end
+  PROPERTIES TIMEOUT 20
+)
+
+add_test(
+  NAME stage11_bench_backends
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:stage11_bench_backends>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage11_bench_backends_test.cmake
+)
+set_tests_properties(
+  stage11_bench_backends
+  PROPERTIES TIMEOUT 30
+)
+
+add_test(
+  NAME stage11_parameter_sweep
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D PYTHON_EXECUTABLE=${Python3_EXECUTABLE}
+    -D SCRIPT_PATH=${CMAKE_CURRENT_SOURCE_DIR}/benchmark/stage11_parameter_sweep.py
+    -D PIPELINE_EXECUTABLE=$<TARGET_FILE:preprocess_pipeline_demo>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage11_parameter_sweep_test.cmake
+)
+set_tests_properties(
+  stage11_parameter_sweep
+  PROPERTIES TIMEOUT 30
+)
+
+add_test(
+  NAME stage11_analyze_results
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D PYTHON_EXECUTABLE=${Python3_EXECUTABLE}
+    -D SCRIPT_PATH=${CMAKE_CURRENT_SOURCE_DIR}/benchmark/stage11_analyze_results.py
+    -D FIXTURE_PATH=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/stage11_analysis_fixture.csv
+    -D SWEEP_SCRIPT_PATH=${CMAKE_CURRENT_SOURCE_DIR}/benchmark/stage11_parameter_sweep.py
+    -D PIPELINE_EXECUTABLE=$<TARGET_FILE:preprocess_pipeline_demo>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage11_analyze_results_test.cmake
+)
+set_tests_properties(
+  stage11_analyze_results
+  PROPERTIES TIMEOUT 20
+)
+
+add_test(
+  NAME stage11_capture_profile
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D PYTHON_EXECUTABLE=${Python3_EXECUTABLE}
+    -D SCRIPT_PATH=${CMAKE_CURRENT_SOURCE_DIR}/benchmark/stage11_capture_profile.py
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage11_capture_profile_test.cmake
+)
+set_tests_properties(
+  stage11_capture_profile
   PROPERTIES TIMEOUT 10
 )

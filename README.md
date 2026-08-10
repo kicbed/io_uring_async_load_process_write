@@ -8,21 +8,29 @@ The final project is a bounded-memory, observable read-process-write pipeline:
 read raw block -> CPU preprocessing stage -> write processed block
 ```
 
-Current status: Stage 10 is complete. `preprocess_pipeline_demo` streams a file
-through one reader, one CPU processor, and one writer with two fixed-capacity
-queues and a fixed-size aligned BufferPool. A move-only `BlockWorkItem` carries
-one RAII buffer lease and its offset through the whole path. The built-in
-`ByteIncrementStage` changes every byte modulo 256, and the demo verifies the
-published output in a second bounded streaming pass.
+Current status: Stage 10 is complete and Stage 11 is in progress.
+`preprocess_pipeline_demo` streams a file through one reader, one CPU
+processor, and one writer with two fixed-capacity queues and a fixed-size
+aligned BufferPool. A move-only `BlockWorkItem` carries one RAII buffer lease
+and its offset through the whole path. The built-in `ByteIncrementStage`
+changes every byte modulo 256, and the demo verifies the published output in a
+second bounded streaming pass.
 
 The demo accepts Auto, io_uring, thread-pool, or synchronous read backends.
 Auto mode preserves the Stage 6 construction-time fallback policy. Runtime
 output exposes progress, measured throughput, read/process/write latency,
 per-Stage latency, queue depths, and current/peak in-flight buffers. Final data
 is written to a same-directory temporary file, file-synced, atomically renamed,
-and followed by a parent-directory fsync. Stage 11 still owns controlled
-performance comparisons and large-file RSS acceptance; these Stage 10 metrics
-are observations, not benchmark claims.
+and followed by a parent-directory fsync. Stage 11.1 now provides a controlled
+no-overlap-versus-overlap experiment, while Stage 11.2 runs the same bounded
+pipeline through Sync, ThreadPool, io_uring, and the recorded Auto selection.
+Stage 11.3 automates block-size, buffer-count, queue-depth, and backend sweeps
+while recording each child process's peak RSS. Stage 11.4 validates and groups
+those raw samples, then produces a summary CSV, two dependency-free SVG charts,
+and an evidence-bounded Markdown report. Stage 11.5 captures an exact command's
+`strace -f -c` or `perf stat` output without mixing profiler-distorted timing
+into benchmark CSV. Controlled large-file results and RSS acceptance still
+require real recorded runs; functional-test timings are not benchmark claims.
 
 ## Build
 
@@ -87,6 +95,115 @@ ctest --test-dir build -R '^stage10_' --output-on-failure
 These tests cover work-item ownership, normal/error queue shutdown, RAII lease
 return, the three-thread executor, runtime metrics, exact transformed output,
 forced Auto fallback, and reliable temporary-file publication.
+
+## Stage 11.1 Fair End-to-End Baseline
+
+```bash
+./build-release/stage11_bench_end_to_end \
+  /path/to/input.bin \
+  /path/to/serial-output.bin \
+  /path/to/no-overlap-output.bin \
+  /path/to/overlap-output.bin \
+  1048576 \
+  8 \
+  4 \
+  20
+```
+
+The two pipeline rows use the same three worker threads, queues,
+`SyncBackend`, and `ByteIncrementStage`. The control owns one buffer, which
+prevents cross-block overlap; the treatment owns at least three, which permits
+read/process/write overlap. The serial row is the correctness oracle. CSV is
+emitted only after bounded byte-for-byte verification succeeds.
+
+## Stage 11.2 Read Backend Matrix
+
+```bash
+mkdir -p /tmp/asyncdataloader-backends
+./build-release/stage11_bench_backends \
+  /path/to/input.bin \
+  /tmp/asyncdataloader-backends \
+  1048576 \
+  8 \
+  4 \
+  2 \
+  20
+```
+
+This command keeps the processing and writing paths fixed and changes only the
+read backend. Explicit unavailable backends are reported as skipped rather
+than mislabeled. Auto is reported as a selection policy together with the
+backend it actually chose. See `docs/benchmark.md` for exact measurement
+boundaries and limitations.
+
+## Stage 11.3 Parameter and RSS Sweep
+
+```bash
+mkdir -p /tmp/asyncdataloader-sweep
+python3 benchmark/stage11_parameter_sweep.py \
+  --executable ./build-release/preprocess_pipeline_demo \
+  --input /path/to/input.bin \
+  --output-directory /tmp/asyncdataloader-sweep \
+  --csv /tmp/asyncdataloader-sweep/results.csv \
+  --environment-id local-release \
+  --block-sizes 1048576,4194304 \
+  --buffers 3,8 \
+  --queue-depths 1,4 \
+  --backends sync,threadpool,uring \
+  --thread-workers 2 \
+  --iterations 3
+```
+
+Every sample launches a fresh C++ process, so GNU `time` can report that
+sample's independent peak RSS. The script reuses and removes one uniquely
+named scratch output, requires the C++ correctness check to pass, checks that
+queue/buffer metrics remain within their configured bounds, and atomically
+publishes the CSV only after the complete matrix succeeds.
+
+## Stage 11.4 Result Analysis
+
+```bash
+mkdir -p /tmp/asyncdataloader-analysis
+python3 benchmark/stage11_analyze_results.py \
+  --input-csv /tmp/asyncdataloader-sweep/results.csv \
+  --output-directory /tmp/asyncdataloader-analysis \
+  --minimum-samples 5
+```
+
+The analyzer keeps unlike configurations separate and refuses to combine
+different environment IDs. It writes `summary.csv`, `throughput.svg`,
+`peak_rss.svg`, and `analysis.md`. Generated findings describe only the
+recorded observations. They do not claim that io_uring is always fastest or
+guess a performance cause without separate `strace`/`perf` evidence.
+
+## Stage 11.5 System Evidence Capture
+
+Capture a syscall summary for one exact pipeline command:
+
+```bash
+mkdir -p /tmp/asyncdataloader-profiles
+python3 benchmark/stage11_capture_profile.py \
+  --tool strace \
+  --output-directory /tmp/asyncdataloader-profiles \
+  --label sync-strace \
+  --environment-id local-release \
+  -- \
+  ./build-release/preprocess_pipeline_demo \
+  /path/to/input.bin \
+  /tmp/sync-strace-output.bin \
+  --backend=sync \
+  --block-size=1048576 \
+  --buffers=8 \
+  --queue-depth=4 \
+  --thread-workers=2 \
+  --report-ms=0
+```
+
+Use `--tool perf` and a new label/output file to capture `perf stat` instead.
+Each invocation really runs the pipeline once. The new evidence directory
+contains the exact command, profiler output, child stdout/stderr, and status.
+Existing evidence is never overwritten. Profiled wall time is diagnostic and
+must not be copied into the Stage 11.3 benchmark CSV.
 
 ## Custom Stage Demo
 

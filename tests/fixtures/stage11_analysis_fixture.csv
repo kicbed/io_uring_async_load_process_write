@@ -1,0 +1,10 @@
+environment_id,input_path,input_bytes,requested_backend,selected_backend,block_size,max_inflight_buffers,queue_depth,thread_workers,sample_index,buffer_pool_bytes,blocks_written,bytes_written,inflight_peak,read_process_queue_peak,process_write_queue_peak,read_average_us,process_average_us,write_average_us,stage_average_us,elapsed_ms,throughput_mib_s,peak_rss_kib,rss_limit_mib,rss_within_limit,verification
+ctest-synthetic,/synthetic/stage11-input.bin,1048576,sync,sync,1048576,3,2,2,1,3145728,1,1048576,2,1,1,3000,2000,4000,1900,12,83.333,12288,64,true,passed
+ctest-synthetic,/synthetic/stage11-input.bin,1048576,sync,sync,1048576,3,2,2,2,3145728,1,1048576,2,1,1,2800,2100,3800,2000,10,100.000,12544,64,true,passed
+ctest-synthetic,/synthetic/stage11-input.bin,1048576,sync,sync,1048576,3,2,2,3,3145728,1,1048576,2,1,1,2900,2050,3900,1950,11,90.909,12320,64,true,passed
+ctest-synthetic,/synthetic/stage11-input.bin,1048576,threadpool,thread_pool,1048576,3,2,2,1,3145728,1,1048576,3,2,1,1900,2000,3000,1900,8,125.000,14336,64,true,passed
+ctest-synthetic,/synthetic/stage11-input.bin,1048576,threadpool,thread_pool,1048576,3,2,2,2,3145728,1,1048576,3,2,1,2000,1950,3100,1850,8.5,117.647,14592,64,true,passed
+ctest-synthetic,/synthetic/stage11-input.bin,1048576,threadpool,thread_pool,1048576,3,2,2,3,3145728,1,1048576,3,2,1,1800,2050,2900,1950,7.5,133.333,14400,64,true,passed
+ctest-synthetic,/synthetic/stage11-input.bin,1048576,uring,io_uring,1048576,3,2,2,1,3145728,1,1048576,3,2,1,2100,2000,3200,1900,9,111.111,16384,64,true,passed
+ctest-synthetic,/synthetic/stage11-input.bin,1048576,uring,io_uring,1048576,3,2,2,2,3145728,1,1048576,3,2,1,2200,1950,3300,1850,9.5,105.263,16640,64,true,passed
+ctest-synthetic,/synthetic/stage11-input.bin,1048576,uring,io_uring,1048576,3,2,2,3,3145728,1,1048576,3,2,1,2000,2050,3100,1950,8.5,117.647,16448,64,true,passed
