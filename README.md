@@ -8,7 +8,7 @@ The final project is a bounded-memory, observable read-process-write pipeline:
 read raw block -> CPU preprocessing stage -> write processed block
 ```
 
-Current status: Stage 11 is complete and Stage 12 is next.
+Current status: Stage 12 is complete and Stage 13 is next.
 `preprocess_pipeline_demo` streams a file through one reader, one CPU
 processor, and one writer with two fixed-capacity queues and a fixed-size
 aligned BufferPool. A move-only `BlockWorkItem` carries one RAII buffer lease
@@ -32,7 +32,9 @@ and an evidence-bounded Markdown report. Stage 11.5 captures an exact command's
 into benchmark CSV. Stage 11.6 archives one real WSL2 reference campaign with
 raw CSV, charts, environment, commands, bounded-RSS observations, and honest
 profiler limitations. Formal 50/200 GiB acceptance is still unclaimed;
-functional-test timings are not benchmark claims.
+functional-test timings are not benchmark claims. Stage 12 adds TTY-aware live
+progress, a readable final summary, and an optional reliably published JSON
+snapshot while retaining Stage 11's machine-readable `key=value` output.
 
 ## Build
 
@@ -217,6 +219,27 @@ failure. Its 24 exact parameter groups had no universal backend winner. With a
 about 155.7 MiB for 1-4 GiB inputs and every row passed output and configured
 bound checks. This is bounded-memory evidence, not a substitute for the still
 unrun 50/200 GiB T1/T1b acceptance campaign.
+
+## Stage 12 Terminal and JSON Metrics
+
+```bash
+./build/preprocess_pipeline_demo \
+  /path/to/input.bin \
+  /path/to/output.bin \
+  --backend=auto \
+  --report-ms=250 \
+  --metrics-json=/path/to/metrics.json
+```
+
+An interactive terminal refreshes one live progress line; redirected stdout
+uses newline-delimited `live` records. `--report-ms=0` disables only periodic
+progress. The final summary and optional schema-versioned JSON come from the
+same bounded metrics snapshot after pipeline workers stop and output
+verification passes. JSON is published through a same-directory temporary
+file, `fsync`, atomic `rename`, and directory `fsync`.
+
+See [`docs/metrics_output.md`](docs/metrics_output.md) for the output fields,
+reliability boundary, and reporter ownership rules.
 
 ## Custom Stage Demo
 

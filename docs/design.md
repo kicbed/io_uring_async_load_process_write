@@ -750,8 +750,8 @@ remains bounded by the Stage 8 pool configuration.
 - The Stage 8 teaching queue is not presented as the final pair of
   read-to-process and process-to-write queues, so Stage 9 does not give it
   misleading production metric names.
-- A snapshot provides reporting data; terminal refreshing and optional JSON
-  formatting remain Stage 12 presentation work.
+- A snapshot provides reporting data; Stage 12 now consumes it for terminal
+  refreshing and optional JSON without changing this Stage 9 ownership model.
 - Metrics do not prove read/process/write overlap, ordered output, reliable
   persistence, bounded large-file RSS, or performance improvement.
 - No benchmark number is inferred or reported in this stage.
@@ -881,10 +881,10 @@ The BufferPool Gauge follows lease acquisition and RAII return. Total process
 latency surrounds the whole stage chain; the nested Stage histogram explains
 the cost of each registered transformation.
 
-`preprocess_pipeline_demo` may sample these atomics while workers run and print
-plain status lines. The final snapshot is exact after the workers stop. Its
-throughput is bytes written divided by measured pipeline-and-commit elapsed
-time; it is one run's observation, not a benchmark comparison.
+Stage 12's reporting layer samples these atomics while workers run. The final
+snapshot is exact after the workers stop. Its throughput is bytes written
+divided by measured pipeline-and-commit elapsed time; it is one run's
+observation, not a benchmark comparison.
 
 ### Reliable Publication
 
@@ -924,11 +924,102 @@ reusable verification blocks and therefore does not load either file in full.
 - Large-file RSS under a memory limit, controlled overlap evidence, and backend
   performance comparisons belong to Stage 11; no Stage 10 timing is promoted
   into a benchmark claim.
-- Stage 12 may improve terminal presentation and optionally add JSON. Stage 10
-  uses simple periodic text lines only.
+- Stage 12 now provides TTY-aware terminal presentation and optional JSON over
+  the same Stage 10 metrics without changing the executor.
 - The processor currently has one worker and preserves FIFO order. Multi-core
   out-of-order processing and T5 acceptance are not claimed.
 - The temp/fsync/rename mechanism is implemented, but automated `kill -9`
   crash testing remains Stage 13.
 - TSan-instrumented binaries compile here, but this WSL runtime aborts before
   project code with `unexpected memory mapping`; no TSan-safety claim is made.
+
+## Stage 12: Terminal and Optional JSON Metrics
+
+### Reporting Is an Observer, Not a Pipeline Stage
+
+Stage 12 consumes the metrics created by Stage 9 and updated by the Stage 10
+executor. It does not sit between reader, processor, and writer:
+
+```text
+bounded data path:
+BufferPool -> reader -> bounded queue -> processor -> bounded queue -> writer
+
+observation path:
+Counter / Gauge / Histogram -> terminal reporter -> final Snapshot -> JSON
+```
+
+`PipelineRunReport` holds only fixed run metadata and final totals. It contains
+no block payload or `BufferHandle`. `LiveTerminalReporter` borrows stable
+Counter and Gauge references from the caller-owned `MetricsRegistry`; the
+registry and executor outlive the reporter.
+
+### Live Reporter Lifetime
+
+When `--report-ms` is positive, `LiveTerminalReporter` owns one `std::jthread`.
+The thread periodically loads written bytes, queue depths, and active buffer
+leases with the existing metric APIs. It never locks a pipeline queue or uses a
+metric as synchronization. A TTY receives one refreshed line; redirected
+stdout receives newline-delimited records.
+
+`stop()` requests cooperative cancellation, wakes the timed wait, joins the
+thread, and is safe to call again from the destructor. The join occurs before
+the final summary is printed, so live and final terminal writes cannot overlap.
+Reporting exceptions stop only the best-effort observer; they do not terminate
+pipeline worker threads.
+
+### Final Snapshot and Formats
+
+The executor first finishes and joins its three workers, processed output is
+committed, and the demo verifies it in a bounded second pass. It then takes one
+final `MetricsRegistry::Snapshot` and uses that same value for:
+
+- the human-readable terminal summary;
+- optional schema-versioned JSON;
+- the existing machine-readable `key=value` records.
+
+The snapshot is stable because workers have quiesced. Periodic live loads are
+not advertised as transactional. `StreamStateGuard` restores caller stream
+flags after fixed-precision formatting, so one formatter cannot accidentally
+change later output.
+
+### Reliable JSON Publication
+
+`render_metrics_json()` emits fixed run/config/result objects and bounded
+Counter, Gauge, and Histogram arrays. JSON strings escape control characters,
+and non-finite numbers are rejected because JSON has no NaN or infinity
+literal.
+
+`write_metrics_json_atomic()` renders before touching the destination, then
+uses a same-directory temporary file:
+
+```text
+mkstemp -> complete write -> fsync(file) -> rename -> fsync(directory)
+```
+
+RAII owns the temporary file descriptor and removes the temporary name if
+publication fails before rename. Input, processed output, and metrics JSON must
+name different files. The JSON parent directory must already exist; Stage 12
+does not silently create an unexpected directory tree.
+
+### Compatibility and Boundedness
+
+Stage 11 tools parse the original `key=value` lines, so those records remain
+stable. They can run with `--report-ms=0` to avoid periodic output while still
+receiving final metrics. `Auto` still reports both requested and actually
+selected backends.
+
+Report memory consists of a fixed metadata object, at most one small progress
+line, and one snapshot/JSON document bounded by the registry's 64-metric and
+fixed-bucket limits. Nothing is stored per block. Buffer ownership,
+fixed-capacity queues, backpressure, write offsets, and reliable processed-file
+publication remain unchanged.
+
+### Current Boundaries
+
+- Terminal output and a local JSON artifact are supported; HTTP, dashboards,
+  databases, and remote collection are out of scope.
+- JSON is a completed-run snapshot, not an event log and not a per-block trace.
+- A live rate is an observation, not evidence that coroutines or io_uring made
+  the pipeline faster.
+- Stage 13 still owns final error/acceptance tests and unresolved large-file,
+  crash-kill, TSan-environment, and interview packaging work.

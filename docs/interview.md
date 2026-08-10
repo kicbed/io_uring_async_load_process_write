@@ -709,8 +709,9 @@ observe state; they never synchronize work or grant buffer ownership.
 It does not prove that io_uring is fastest, that coroutines improve speed, or
 that a particular backend wins. It also does not yet provide controlled
 large-file RSS evidence, multi-core out-of-order processing, automated
-`kill -9` acceptance, polished terminal UI, or JSON. Those remain explicit
-Stage 11-13 boundaries.
+`kill -9` acceptance, or final acceptance coverage. Stage 11 later added
+controlled measurements and Stage 12 added terminal/JSON reporting; unresolved
+acceptance work remains an explicit Stage 13 boundary.
 
 Interview-ready short version:
 
@@ -723,3 +724,89 @@ Interview-ready short version:
 > live counters, queue depths, in-flight buffers, and stage latencies come from
 > the actual execution path. Performance comparisons are deliberately deferred
 > to controlled benchmarks.
+
+## Stage 12: Terminal and Optional JSON Metrics
+
+### Where does reporting fit in the function flow?
+
+```text
+main
+  -> build MetricsRegistry, Pipeline, and PipelineExecutor
+  -> write_terminal_header()
+  -> start LiveTerminalReporter
+  -> PipelineExecutor::run_file()
+  -> LiveTerminalReporter::stop()
+  -> bounded output verification
+  -> MetricsRegistry::snapshot()
+  -> optional write_metrics_json_atomic()
+  -> write_terminal_summary()
+  -> retain key=value output for Stage 11 tools
+```
+
+Reporting observes the pipeline from the side. It is not a fourth stage and
+never receives a block.
+
+### What is `PipelineRunReport` for?
+
+The metric snapshot knows measured counters, gauges, and histograms, but it
+does not know which input path, backend, stage, or configuration produced them.
+`PipelineRunReport` carries that small run context plus final elapsed/result
+fields. Separating the two lets terminal and JSON formatters use the same data
+without putting presentation concerns into `PipelineExecutor`.
+
+### Why does live progress use a `std::jthread`?
+
+Progress must refresh while the caller is blocked waiting for the pipeline.
+One small observer thread can wait for the configured interval and load metric
+atomics. `std::jthread` supplies RAII joining and a `stop_token`, so `stop()` can
+wake it promptly and the destructor cannot leave a joinable thread behind.
+The thread borrows metrics; it does not own or synchronize buffers.
+
+### Why are TTY and redirected output different?
+
+A real terminal can rewrite one line with carriage-return and erase sequences.
+A file or pipe should receive normal newline-delimited text so logs remain
+readable and parsers never see cursor-control bytes. `isatty(stdout)` selects
+only formatting behavior; metric values are the same.
+
+### Why take one final snapshot?
+
+Reader, processor, and writer metrics can change between separate loads during
+execution. After `run_file()` returns, all workers have joined, so one bounded
+snapshot is stable. Reusing it for terminal, JSON, and machine output prevents
+the three formats from accidentally describing different moments.
+
+### Why not write JSON directly to its final path?
+
+A crash or short write could leave a truncated document that looks like the
+official report. Stage 12 renders first, writes a temporary file beside the
+target, handles interrupted/short writes, fsyncs it, renames it atomically, and
+fsyncs the directory. Before rename, RAII removes an unfinished temporary file.
+
+### Does reporting change bounded memory or backpressure?
+
+No. The live reporter reads only numeric metrics. The final snapshot is capped
+by `MetricsRegistry` limits, and JSON has one entry per registered metric, not
+one entry per block. The original ownership path remains:
+
+```text
+BufferPool -> reader -> processor -> writer -> BufferPool
+```
+
+The two fixed queues and pool still provide backpressure.
+
+### Why keep both readable output and `key=value` output?
+
+Humans benefit from units, progress bars, and grouped summaries. Stage 11
+automation already depends on stable `key=value` records. Keeping a separate
+machine section improves the terminal without breaking benchmark tooling or
+forcing it to scrape presentation text.
+
+Interview-ready short version:
+
+> I added a reporting layer that observes the existing bounded metrics rather
+> than entering the data path. A cancellable RAII thread renders TTY-aware live
+> progress, then one post-join snapshot feeds the terminal summary, backward-
+> compatible machine records, and optional schema-versioned JSON. JSON uses
+> temp-file, fsync, atomic rename, and directory fsync, while the reporter owns
+> no buffers and cannot change backpressure or ordering.

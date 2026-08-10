@@ -461,6 +461,28 @@ target_link_libraries(
   PRIVATE asyncdataloader_buffer
 )
 
+add_library(asyncdataloader_reporting
+  src/reporting/pipeline_reporter.cpp
+)
+target_compile_features(asyncdataloader_reporting PUBLIC cxx_std_20)
+target_include_directories(
+  asyncdataloader_reporting
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(
+  asyncdataloader_reporting
+  PUBLIC asyncdataloader_pipeline
+)
+
+add_executable(stage12_pipeline_reporter_test
+  tests/stage12_pipeline_reporter_test.cpp
+)
+target_compile_features(stage12_pipeline_reporter_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage12_pipeline_reporter_test
+  PRIVATE asyncdataloader_reporting
+)
+
 add_executable(stage10_block_work_item_test
   tests/stage10_block_work_item_test.cpp
 )
@@ -531,6 +553,7 @@ target_link_libraries(
   preprocess_pipeline_demo
   PRIVATE
     asyncdataloader_pipeline
+    asyncdataloader_reporting
     PkgConfig::LIBURING
     Threads::Threads
 )
@@ -999,5 +1022,26 @@ add_test(
 )
 set_tests_properties(
   stage11_capture_profile
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage12_pipeline_reporter
+  COMMAND stage12_pipeline_reporter_test
+)
+set_tests_properties(
+  stage12_pipeline_reporter
+  PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage12_preprocess_pipeline_demo
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D EXECUTABLE_PATH=$<TARGET_FILE:preprocess_pipeline_demo>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage12_preprocess_pipeline_demo_test.cmake
+)
+set_tests_properties(
+  stage12_preprocess_pipeline_demo
   PROPERTIES TIMEOUT 10
 )

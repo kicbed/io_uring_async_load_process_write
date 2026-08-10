@@ -1,33 +1,28 @@
 #include "backend/backend_factory.h"
 #include "backend/io_backend.h"
 #include "config/pipeline_config.h"
-#include "metrics/counter.h"
-#include "metrics/gauge.h"
 #include "metrics/metrics_registry.h"
 #include "pipeline/builtin_stages.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_executor.h"
+#include "reporting/pipeline_reporter.h"
 #include "util/file_io.h"
 
-#include <algorithm>
 #include <charconv>
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
-#include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
-#include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -40,7 +35,8 @@ using asyncdataloader::metrics::MetricsRegistry;
 using asyncdataloader::pipeline::ByteIncrementStage;
 using asyncdataloader::pipeline::Pipeline;
 using asyncdataloader::pipeline::PipelineExecutor;
-using asyncdataloader::pipeline::PipelineMetricNames;
+using asyncdataloader::reporting::LiveTerminalReporter;
+using asyncdataloader::reporting::PipelineRunReport;
 
 using Clock = std::chrono::steady_clock;
 
@@ -51,6 +47,7 @@ struct Options {
     BackendKind backend_kind{BackendKind::Auto};
     std::size_t thread_workers{2};
     std::size_t report_interval_ms{250};
+    std::optional<std::filesystem::path> metrics_json_path;
     bool disable_uring{false};
     bool disable_thread_pool{false};
 };
@@ -67,6 +64,7 @@ void print_usage(std::ostream& output, std::string_view program) {
         << "  --alignment=BYTES\n"
         << "  --thread-workers=COUNT\n"
         << "  --report-ms=MILLISECONDS  (0 disables live lines)\n"
+        << "  --metrics-json=PATH        (optional final snapshot)\n"
         << "  --disable-uring            (Auto mode only)\n"
         << "  --disable-threadpool       (Auto mode only)\n";
 }
@@ -170,6 +168,16 @@ Options parse_options(int argc, char** argv) {
                 "--report-ms",
                 true
             );
+        } else if (argument.starts_with("--metrics-json=")) {
+            const std::string_view path = argument.substr(
+                std::string_view{"--metrics-json="}.size()
+            );
+            if (path.empty()) {
+                throw std::invalid_argument(
+                    "--metrics-json requires a non-empty path"
+                );
+            }
+            options.metrics_json_path = std::filesystem::path{path};
         } else if (argument == "--disable-uring") {
             options.disable_uring = true;
         } else if (argument == "--disable-threadpool") {
@@ -194,138 +202,95 @@ Options parse_options(int argc, char** argv) {
             "--buffers exceeds the io_uring queue-depth range"
         );
     }
+    if (options.report_interval_ms > static_cast<std::size_t>(
+            std::chrono::milliseconds::max().count()
+        )) {
+        throw std::invalid_argument("--report-ms is too large");
+    }
     return options;
 }
 
-const asyncdataloader::metrics::Counter& require_counter(
-    const MetricsRegistry& metrics,
-    std::string_view name
+std::filesystem::path normalized_path(
+    const std::filesystem::path& path
 ) {
-    const auto* const metric = metrics.find_counter(name);
-    if (metric == nullptr) {
-        throw std::logic_error("required pipeline Counter is missing");
+    std::error_code error;
+    std::filesystem::path normalized =
+        std::filesystem::weakly_canonical(path, error);
+    if (error) {
+        throw std::system_error(error, "normalize metrics JSON path");
     }
-    return *metric;
+    return normalized;
 }
 
-const asyncdataloader::metrics::Gauge& require_gauge(
-    const MetricsRegistry& metrics,
-    std::string_view name
+void reject_same_file(
+    const std::filesystem::path& left,
+    const std::filesystem::path& right,
+    std::string_view message
 ) {
-    const auto* const metric = metrics.find_gauge(name);
-    if (metric == nullptr) {
-        throw std::logic_error("required pipeline Gauge is missing");
+    if (normalized_path(left) == normalized_path(right)) {
+        throw std::invalid_argument(std::string{message});
     }
-    return *metric;
+
+    std::error_code error;
+    const bool equivalent = std::filesystem::equivalent(left, right, error);
+    if (!error && equivalent) {
+        throw std::invalid_argument(std::string{message});
+    }
+    if (error && error != std::errc::no_such_file_or_directory) {
+        throw std::system_error(error, "compare metrics JSON paths");
+    }
 }
 
-class LiveReporter {
-public:
-    LiveReporter(
-        const MetricsRegistry& metrics,
-        std::uint64_t input_bytes,
-        std::chrono::milliseconds interval,
-        Clock::time_point start
-    )
-        : written_bytes_(require_counter(
-              metrics,
-              PipelineMetricNames::written_bytes
-          )),
-          inflight_(require_gauge(
-              metrics,
-              PipelineMetricNames::inflight_buffers
-          )),
-          read_process_depth_(require_gauge(
-              metrics,
-              PipelineMetricNames::read_process_queue_depth
-          )),
-          process_write_depth_(require_gauge(
-              metrics,
-              PipelineMetricNames::process_write_queue_depth
-          )),
-          input_bytes_(input_bytes),
-          interval_(interval),
-          start_(start) {
-        if (interval_.count() > 0) {
-            worker_ = std::jthread([this](std::stop_token stop_token) {
-                run(stop_token);
-            });
-        }
+void validate_metrics_json_path(const Options& options) {
+    if (!options.metrics_json_path.has_value()) {
+        return;
+    }
+    const std::filesystem::path& path = *options.metrics_json_path;
+    const std::filesystem::path filename = path.filename();
+    if (filename.empty() || filename == "." || filename == "..") {
+        throw std::invalid_argument("--metrics-json must name a file");
     }
 
-    ~LiveReporter() noexcept {
-        stop();
+    std::filesystem::path parent = path.parent_path();
+    if (parent.empty()) {
+        parent = ".";
+    }
+    std::error_code error;
+    const bool parent_is_directory =
+        std::filesystem::is_directory(parent, error);
+    if (error) {
+        throw std::system_error(error, "inspect metrics JSON directory");
+    }
+    if (!parent_is_directory) {
+        throw std::invalid_argument(
+            "--metrics-json parent directory must already exist"
+        );
     }
 
-    LiveReporter(const LiveReporter&) = delete;
-    LiveReporter& operator=(const LiveReporter&) = delete;
-
-    void stop() noexcept {
-        if (!worker_.joinable()) {
-            return;
-        }
-        worker_.request_stop();
-        wakeup_.notify_all();
-        worker_.join();
+    error.clear();
+    const bool target_is_directory =
+        std::filesystem::is_directory(path, error);
+    if (error == std::errc::no_such_file_or_directory) {
+        error.clear();
+    }
+    if (error) {
+        throw std::system_error(error, "inspect metrics JSON target");
+    }
+    if (target_is_directory) {
+        throw std::invalid_argument("--metrics-json must not be a directory");
     }
 
-private:
-    void run(std::stop_token stop_token) {
-        std::unique_lock lock(wait_mutex_);
-        while (!stop_token.stop_requested()) {
-            static_cast<void>(wakeup_.wait_for(
-                lock,
-                stop_token,
-                interval_,
-                [] { return false; }
-            ));
-            if (stop_token.stop_requested()) {
-                return;
-            }
-
-            lock.unlock();
-            print_once();
-            lock.lock();
-        }
-    }
-
-    void print_once() const {
-        const std::uint64_t completed = written_bytes_.value();
-        const double elapsed_seconds =
-            std::chrono::duration<double>(Clock::now() - start_).count();
-        const double progress = input_bytes_ == 0
-            ? 100.0
-            : std::min(
-                  100.0,
-                  100.0 * static_cast<double>(completed) /
-                      static_cast<double>(input_bytes_)
-              );
-        const double throughput_mib = elapsed_seconds > 0.0
-            ? static_cast<double>(completed) /
-                (1024.0 * 1024.0 * elapsed_seconds)
-            : 0.0;
-
-        std::cout << std::fixed << std::setprecision(2)
-                  << "progress=" << progress << "%"
-                  << " written_bytes=" << completed
-                  << " throughput_mib_s=" << throughput_mib
-                  << " read_process_q=" << read_process_depth_.value()
-                  << " process_write_q=" << process_write_depth_.value()
-                  << " inflight=" << inflight_.value() << '\n'
-                  << std::flush;
-    }
-
-    const asyncdataloader::metrics::Counter& written_bytes_;
-    const asyncdataloader::metrics::Gauge& inflight_;
-    const asyncdataloader::metrics::Gauge& read_process_depth_;
-    const asyncdataloader::metrics::Gauge& process_write_depth_;
-    std::uint64_t input_bytes_;
-    std::chrono::milliseconds interval_;
-    Clock::time_point start_;
-    std::mutex wait_mutex_;
-    std::condition_variable_any wakeup_;
-    std::jthread worker_;
-};
+    reject_same_file(
+        options.input_path,
+        path,
+        "metrics JSON path must differ from input"
+    );
+    reject_same_file(
+        options.output_path,
+        path,
+        "metrics JSON path must differ from pipeline output"
+    );
+}
 
 std::uint64_t checked_file_size(const std::filesystem::path& path) {
     const std::uintmax_t size = std::filesystem::file_size(path);
@@ -437,42 +402,6 @@ void verify_incremented_output(
     }
 }
 
-void print_final_metrics(
-    const MetricsRegistry& metrics,
-    double elapsed_seconds
-) {
-    const auto snapshot = metrics.snapshot();
-    for (const auto& counter : snapshot.counters) {
-        std::cout << counter.name << '=' << counter.value << '\n';
-    }
-    for (const auto& gauge : snapshot.gauges) {
-        std::cout << gauge.name << ".current=" << gauge.value << '\n'
-                  << gauge.name << ".peak=" << gauge.high_watermark << '\n';
-    }
-    for (const auto& histogram : snapshot.histograms) {
-        const double average_us = histogram.data.sample_count == 0
-            ? 0.0
-            : static_cast<double>(histogram.data.sample_sum) /
-                static_cast<double>(histogram.data.sample_count) / 1000.0;
-        std::cout << histogram.name << ".samples="
-                  << histogram.data.sample_count << '\n'
-                  << histogram.name << ".average_us="
-                  << std::fixed << std::setprecision(3) << average_us << '\n';
-    }
-
-    const std::uint64_t written = require_counter(
-        metrics,
-        PipelineMetricNames::written_bytes
-    ).value();
-    const double throughput_mib = elapsed_seconds > 0.0
-        ? static_cast<double>(written) /
-            (1024.0 * 1024.0 * elapsed_seconds)
-        : 0.0;
-    std::cout << "elapsed_ms=" << std::fixed << std::setprecision(3)
-              << elapsed_seconds * 1000.0 << '\n'
-              << "throughput_mib_s=" << throughput_mib << '\n';
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -483,6 +412,7 @@ int main(int argc, char** argv) {
 
     try {
         const Options options = parse_options(argc, argv);
+        validate_metrics_json_path(options);
         const std::uint64_t input_bytes =
             checked_file_size(options.input_path);
 
@@ -510,23 +440,29 @@ int main(int argc, char** argv) {
             metrics
         );
 
-        std::cout << "requested_backend="
-                  << backend_name(options.backend_kind) << '\n'
-                  << "selected_backend=" << backend->name() << '\n'
-                  << "stage=byte_increment\n"
-                  << "input_bytes=" << input_bytes << '\n'
-                  << "buffer_pool_bytes="
-                  << options.pipeline.buffer_pool_bytes() << '\n'
-                  << "max_inflight_buffers="
-                  << options.pipeline.max_inflight_buffers << '\n'
-                  << "queue_depth=" << options.pipeline.queue_depth << '\n';
+        PipelineRunReport report;
+        report.input_path = options.input_path;
+        report.output_path = options.output_path;
+        report.requested_backend = backend_name(options.backend_kind);
+        report.selected_backend = backend->name();
+        report.stage_name = "byte_increment";
+        report.pipeline_config = options.pipeline;
+        report.input_bytes = input_bytes;
+        asyncdataloader::reporting::write_terminal_header(
+            std::cout,
+            report
+        );
 
         const Clock::time_point start = Clock::now();
-        LiveReporter reporter(
+        LiveTerminalReporter reporter(
             metrics,
             input_bytes,
+            options.pipeline.max_inflight_buffers,
+            options.pipeline.queue_depth,
             std::chrono::milliseconds(options.report_interval_ms),
-            start
+            start,
+            std::cout,
+            ::isatty(STDOUT_FILENO) == 1
         );
         const auto result = executor.run_file(
             options.input_path,
@@ -534,21 +470,47 @@ int main(int argc, char** argv) {
         );
         const Clock::time_point completed = Clock::now();
         reporter.stop();
+        report.blocks_written = result.blocks_written;
+        report.bytes_written = result.bytes_written;
+        report.elapsed_seconds =
+            std::chrono::duration<double>(completed - start).count();
+        report.output_committed = true;
 
         verify_incremented_output(
             options.input_path,
             options.output_path,
             options.pipeline.block_size
         );
+        report.verification_passed = true;
 
-        const double elapsed_seconds =
-            std::chrono::duration<double>(completed - start).count();
-        std::cout << "status=complete\n"
-                  << "blocks_written=" << result.blocks_written << '\n'
-                  << "bytes_written=" << result.bytes_written << '\n'
-                  << "output_committed=true\n"
-                  << "verification=passed\n";
-        print_final_metrics(metrics, elapsed_seconds);
+        const MetricsRegistry::Snapshot snapshot = metrics.snapshot();
+        if (options.metrics_json_path.has_value()) {
+            asyncdataloader::reporting::write_metrics_json_atomic(
+                *options.metrics_json_path,
+                snapshot,
+                report
+            );
+        }
+
+        asyncdataloader::reporting::write_terminal_summary(
+            std::cout,
+            snapshot,
+            report
+        );
+        if (options.metrics_json_path.has_value()) {
+            std::cout << "Metrics JSON     : "
+                      << options.metrics_json_path->string() << "\n\n";
+        }
+        std::cout << "Machine-readable metrics\n";
+        asyncdataloader::reporting::write_key_value_configuration(
+            std::cout,
+            report
+        );
+        asyncdataloader::reporting::write_key_value_result(
+            std::cout,
+            snapshot,
+            report
+        );
         return 0;
     } catch (const std::invalid_argument& error) {
         std::cerr << "argument error: " << error.what() << '\n';
