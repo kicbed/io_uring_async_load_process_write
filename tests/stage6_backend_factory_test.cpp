@@ -1,8 +1,10 @@
 #include "backend/backend_factory.h"
 
+#include <cerrno>
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 
 namespace {
 
@@ -43,9 +45,33 @@ int main() {
     BackendConfig uring_config;
     uring_config.kind = BackendKind::Uring;
     uring_config.uring_queue_depth = 2;
+#if ASYNCDATALOADER_HAS_LIBURING
     if (!creates_named_backend(uring_config, "io_uring")) {
         return fail("explicit Uring selection created the wrong backend");
     }
+#else
+    try {
+        static_cast<void>(BackendFactory::create(uring_config));
+        return fail("explicit Uring should fail without compiled support");
+    } catch (const std::system_error& error) {
+        if (error.code().value() != ENOSYS) {
+            return fail("uncompiled Uring did not report ENOSYS");
+        }
+    } catch (...) {
+        return fail("uncompiled Uring used the wrong exception type");
+    }
+
+    BackendConfig auto_without_uring_config;
+    auto_without_uring_config.kind = BackendKind::Auto;
+    auto_without_uring_config.thread_pool_worker_count = 1;
+    auto_without_uring_config.max_inflight = 2;
+    if (!creates_named_backend(
+            auto_without_uring_config,
+            "thread_pool"
+        )) {
+        return fail("Auto did not bypass uncompiled io_uring support");
+    }
+#endif
 
     BackendConfig auto_thread_pool_config;
     auto_thread_pool_config.kind = BackendKind::Auto;

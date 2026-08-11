@@ -25,8 +25,12 @@ Its 24 exact parameter groups do not show a universal backend winner, and its
 recorded configuration. Tiny CTest inputs still verify behavior only; their
 timings are not benchmark data.
 
-Cross-machine conclusions and formal T1/T1b acceptance still require recorded
-Release runs on the declared 50/200 GiB inputs and suitable environments.
+Stage 13 subsequently recorded one allocated 50 GiB T1 run in the
+[2026-08-11 acceptance bundle](benchmark_results/2026-08-11-stage13-t1-50g/README.md).
+It completed and verified all output with a 159,640 KiB child-process peak RSS,
+so T1 passes on that declared environment. T1b remains incomplete because the
+200 GiB point was intentionally not run. Cross-machine performance conclusions
+still require repeated samples on additional declared environments.
 
 ## Workload Families
 
@@ -395,11 +399,42 @@ calls can fail normally while the child command still exits successfully.
     `perf_event_paranoid`, record the failure rather than replacing it with a
     guessed counter or a different-machine conclusion.
 
+## Stage 13 Recorded 50 GiB T1 Run
+
+The final Stage 13 acceptance used the existing Release demo and sweep tool,
+not a special path that bypasses processing, metrics, reliable publication, or
+verification. The input was created with `fallocate -l 50G` on ext4 and had
+both logical and allocated size near 50 GiB:
+
+```text
+input bytes:             53,687,091,200
+input SHA-256:           ab743e145f643a1f6237b7390baf2e6e...
+requested/selected:      auto / io_uring
+block / buffers / queue: 8 MiB / 24 / 8
+BufferPool payload:      201,326,592 bytes (192 MiB)
+blocks / bytes written:  6,400 / 53,687,091,200
+in-flight peak:          19 of 24
+queue peaks:             8 of 8, 8 of 8
+peak RSS:                159,640 KiB
+RSS limit:               300 MiB, passed
+verification:            passed
+```
+
+The program reported 435,414.277 ms for pipeline execution and reliable
+commit; the complete launcher took 523.54 seconds because the demo then
+performed its bounded input/output verification. The raw CSV retains the one
+observed 117.589 MiB/s value, but a single zero-filled, no-cache-drop WSL2 run
+is not a general backend-performance result. Its purpose is T1 memory,
+completion, and correctness acceptance.
+
+The exact environment, commands, checksum, and raw row are archived in
+`docs/benchmark_results/2026-08-11-stage13-t1-50g/`. The temporary 50 GiB
+input and output were removed after capture.
+
 ## Bounded-Memory Acceptance Command
 
-For the T1 configuration from the anti-collapse checklist, first prepare a
-real 50 GB input and record its allocation/checksum. Then run one bounded
-sample such as:
+The following remains the reusable T1 procedure. Prepare a real 50 GB input and
+record its allocation/checksum, then run one bounded sample such as:
 
 ```bash
 python3 benchmark/stage11_parameter_sweep.py \
@@ -416,11 +451,11 @@ python3 benchmark/stage11_parameter_sweep.py \
   --rss-limit-mib 300
 ```
 
-This configures 192 MiB of BufferPool payload. Peak RSS will also include two
-8 MiB verification blocks, code, stacks, metrics, and allocator overhead. T1b
-requires repeating the same configuration for 1/50/200 GB inputs and comparing
-the recorded peak RSS values. These commands are acceptance procedures, not
-claims that those large runs have already happened.
+This configures 192 MiB of BufferPool payload. Peak RSS also includes two 8 MiB
+verification blocks, code, stacks, metrics, and allocator overhead. The
+2026-08-11 bundle records one completed 50 GiB use of this procedure. T1b still
+requires the same configuration at 1/50/200 GiB and comparison of recorded
+peak RSS values; the 200 GiB run has not happened and is not claimed.
 
 ## Environment Record Template
 

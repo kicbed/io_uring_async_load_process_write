@@ -8,7 +8,12 @@ The final project is a bounded-memory, observable read-process-write pipeline:
 read raw block -> CPU preprocessing stage -> write processed block
 ```
 
-Current status: Stage 12 is complete and Stage 13 is next.
+Current status: Stage 13 is complete. Its final reliability pass includes a
+hard-constraint coverage audit, deterministic syscall/backend failure tests, a
+real `SIGKILL` crash-safety test, an isolated real-filesystem `O_DIRECT`
+alignment contract test, and a complete build/test path with liburing disabled.
+The final documents keep uncompleted acceptance items visible instead of
+turning partial evidence into a claim.
 `preprocess_pipeline_demo` streams a file through one reader, one CPU
 processor, and one writer with two fixed-capacity queues and a fixed-size
 aligned BufferPool. A move-only `BlockWorkItem` carries one RAII buffer lease
@@ -31,10 +36,25 @@ and an evidence-bounded Markdown report. Stage 11.5 captures an exact command's
 `strace -f -c` or `perf stat` output without mixing profiler-distorted timing
 into benchmark CSV. Stage 11.6 archives one real WSL2 reference campaign with
 raw CSV, charts, environment, commands, bounded-RSS observations, and honest
-profiler limitations. Formal 50/200 GiB acceptance is still unclaimed;
-functional-test timings are not benchmark claims. Stage 12 adds TTY-aware live
+profiler limitations. The 2026-08-11 Stage 13 run processed one allocated
+50 GiB input with a 159,640 KiB process peak RSS and passed output/bound checks,
+so T1 is now recorded as passed on that environment. T1b remains incomplete
+because the 200 GiB run was intentionally not performed; one-run timings are
+not promoted to general benchmark claims. Stage 12 adds TTY-aware live
 progress, a readable final summary, and an optional reliably published JSON
 snapshot while retaining Stage 11's machine-readable `key=value` output.
+
+The current hard-constraint, acceptance-test, and error-path status is tracked
+in [`docs/stage13_acceptance_matrix.md`](docs/stage13_acceptance_matrix.md).
+The internal test seams and the exact `EACCES`, `EINTR`, short-write, and
+backend-construction failure cases are explained in
+[`docs/stage13_deterministic_error_tests.md`](docs/stage13_deterministic_error_tests.md).
+The parent/child synchronization, real three-worker crash point, atomic
+publication guarantee, and orphan-temporary-file boundary are documented in
+[`docs/stage13_crash_safety.md`](docs/stage13_crash_safety.md).
+Build-time fallback, the `O_DIRECT` pass/skip contract, the 50 GiB T1 record,
+and the current WSL2 TSan limitation are recorded in
+[`docs/stage13_environment_acceptance.md`](docs/stage13_environment_acceptance.md).
 
 ## Build
 
@@ -43,6 +63,35 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
+
+The default build probes for liburing. To exercise or deploy only the bounded
+ThreadPool/Sync fallback paths, disable it explicitly:
+
+```bash
+cmake -S . -B build-no-uring \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DASYNCDATALOADER_ENABLE_LIBURING=OFF
+cmake --build build-no-uring -j
+ctest --test-dir build-no-uring --output-on-failure
+```
+
+In that build, io_uring-only teaching targets are omitted, Auto selects
+ThreadPool (or Sync if ThreadPool construction fails), and an explicit Uring
+request fails clearly instead of being silently relabeled.
+
+## Stage 13 Reliability and Acceptance
+
+```bash
+ctest --test-dir build -R '^stage13_' --output-on-failure
+```
+
+The five Stage 13 tests cover injected file-I/O errors, backend construction
+policy, commit-before-rename process death, local direct-I/O alignment, and a
+nested no-liburing build. The `O_DIRECT` test uses CTest's skip result when the
+host filesystem cannot provide the tested contract; a skip is neither a pass
+nor a product failure. See the
+[acceptance matrix](docs/stage13_acceptance_matrix.md) for the exact H1-H8 and
+T1-T9 status.
 
 ## Stage 8 Backpressure Demo
 
@@ -57,7 +106,9 @@ that both RAII leases returned their buffers to the pool.
 
 See [`docs/stage8_odirect_alignment.md`](docs/stage8_odirect_alignment.md) for
 the boundary between Stage 8's aligned allocation and a future real
-`O_DIRECT` I/O path.
+`O_DIRECT` I/O path. Stage 13 now validates address, length, and offset
+misalignment against the current filesystem, but the production pipeline still
+uses buffered I/O and does not claim an end-to-end direct-I/O backend.
 
 ## Stage 9 Metrics Tests
 
@@ -264,6 +315,6 @@ fixed block `[1,2,3]` into `[3,5,7]` with `output = input * 2 + 1`.
 ```
 
 The demo prints both the requested and selected backend, the byte count, and
-the first fixed-size block. This build currently requires the liburing
-development package even when the runtime factory falls back to another
-backend.
+the first fixed-size block. Runtime initialization failure and build-time
+liburing absence both preserve the same policy: only Auto may fall back;
+explicit Uring remains fail-fast and observable.

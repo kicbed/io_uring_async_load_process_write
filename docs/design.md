@@ -365,9 +365,10 @@ belongs to Stage 10.
 
 - The common interface currently covers positional reads only.
 - `wait_one()` is a caller-driven one-completion API, not a general event loop.
-- CMake currently requires the liburing development package at build time;
-  runtime ring-initialization failure can fall back, but a no-liburing build is
-  not yet supported.
+- CMake probes liburing by default and defines one build capability flag.
+  `-DASYNCDATALOADER_ENABLE_LIBURING=OFF` (or a failed probe) omits Uring-only
+  sources/targets. In that build, explicit Uring returns `ENOSYS` while Auto
+  continues through ThreadPool and Sync.
 - Auto mode exposes the selected backend, but does not retain the original
   initialization error as structured diagnostic data.
 - There is no claim that io_uring is universally faster than the alternatives.
@@ -571,7 +572,11 @@ protocols must be designed before the Stage 10 end-to-end pipeline.
 Aligned allocation is necessary but not sufficient for direct I/O. Buffer
 address, request length, and file offset may each have filesystem-specific
 alignment requirements. See `docs/stage8_odirect_alignment.md` for the exact
-Stage 8 guarantee and remaining runtime checks.
+Stage 8 guarantee. Stage 13 adds a real-filesystem contract test that confirms
+one aligned read and separately probes misaligned address, length, and offset.
+It can skip on a filesystem that does not expose that contract. The production
+pipeline still uses buffered I/O, so this test is not an end-to-end direct-I/O
+backend claim.
 
 ### Current Boundaries
 
@@ -928,8 +933,9 @@ reusable verification blocks and therefore does not load either file in full.
   the same Stage 10 metrics without changing the executor.
 - The processor currently has one worker and preserves FIFO order. Multi-core
   out-of-order processing and T5 acceptance are not claimed.
-- The temp/fsync/rename mechanism is implemented, but automated `kill -9`
-  crash testing remains Stage 13.
+- Stage 13 now tests the temp/fsync/rename publication boundary by killing a
+  real child pipeline with `SIGKILL` before commit and checking the final name
+  from the parent process.
 - TSan-instrumented binaries compile here, but this WSL runtime aborts before
   project code with `unexpected memory mapping`; no TSan-safety claim is made.
 
@@ -1021,5 +1027,166 @@ publication remain unchanged.
 - JSON is a completed-run snapshot, not an event log and not a per-block trace.
 - A live rate is an observation, not evidence that coroutines or io_uring made
   the pipeline faster.
-- Stage 13 still owns final error/acceptance tests and unresolved large-file,
-  crash-kill, TSan-environment, and interview packaging work.
+- Stage 13 completed the final error tests, build fallback, 50 GiB T1 run, and
+  interview packaging. The acceptance matrix still marks T1b, T2, T3, T5,
+  full T7, and T9 as incomplete rather than expanding this reporting stage to
+  implement new scheduler features.
+
+## Stage 13: Reliability, Environment Acceptance, and Final Boundaries
+
+### Scope
+
+Stage 13 does not add a fourth pipeline stage or replace the scheduler. It
+tests the contracts that are difficult to reach by ordinary happy-path runs:
+
+```text
+deterministic syscall/backend failures
+  + real pre-commit process death
+  + real-filesystem direct-I/O alignment probes
+  + build-time backend absence
+  + recorded large-file and sanitizer runs
+  -> evidence matrix and interview-ready boundaries
+```
+
+It deliberately does not add an unbounded negative mode, multi-core processing,
+a production `O_DIRECT` backend, or a CPU-heavy benchmark merely to turn every
+T1-T9 row green. Those changes would alter earlier architecture and require
+their own staged design work.
+
+### Deterministic Error Seams
+
+Public callers still use `open_read_only()`, `read_at()`, `write_all_at()`,
+`fsync_fd()`, and `BackendFactory::create()`. Each public function supplies a
+small table of real operations to an internal algorithm:
+
+```text
+production public wrapper
+  -> system_file_io_operations() / system_backend_factory_operations()
+  -> *_with(real operation table)
+
+Stage 13 test
+  -> *_with(scripted operation table)
+  -> exact EACCES / EINTR / short write / construction failure
+```
+
+`FileIOOperations` and `BackendFactoryOperations` contain function pointers,
+not mutable global switches. A test can therefore script a rare return value
+while still running the production retry, offset-advance, and fallback
+algorithms. The seams live under `detail` because they are testability
+boundaries rather than new application APIs.
+
+The short-write algorithm advances all three pieces of progress together:
+
+```text
+remaining pointer += bytes written
+remaining length  -= bytes written
+file offset       += bytes written
+```
+
+`EINTR` retries without advancing. Zero progress on a non-empty write becomes
+`EIO`, preventing an infinite loop. A failure after partial progress reports
+both the preserved errno and the exact completed byte count.
+
+### Process-Level Crash Test
+
+The crash test uses `fork()` plus `exec()` so the child has a normal process
+image and can be killed without destroying the CTest parent:
+
+```text
+child: run real three-worker pipeline into same-directory temp file
+  -> first transformed block reaches the temp file
+  -> processing stage blocks on block 2 and notifies through a pipe
+
+parent: observe synchronization + partial temp payload
+  -> kill(child, SIGKILL)
+  -> waitpid() proves SIGKILL termination
+  -> old final remains byte-for-byte intact, or absent final remains absent
+```
+
+`SIGKILL` cannot execute C++ destructors, so an orphan temporary name may
+remain. That is different from exposing a partial final file. The test proves
+the atomic-publication boundary; a production orphan-scavenging policy would
+need separate naming, age, and concurrent-instance rules.
+
+### Build-Time Backend Capability
+
+CMake owns the compile-time capability decision:
+
+```text
+ASYNCDATALOADER_ENABLE_LIBURING=ON
+  -> pkg-config finds liburing: compile/link Uring sources and targets
+  -> not found: omit them and compile fallback paths
+
+ASYNCDATALOADER_ENABLE_LIBURING=OFF
+  -> omit Uring sources and links deterministically
+```
+
+`ASYNCDATALOADER_HAS_LIBURING` keeps `BackendFactory` consistent with that
+build graph. In a no-liburing build, a valid explicit Uring request throws a
+`std::system_error` carrying `ENOSYS`; Auto catches that construction failure
+and tries the bounded ThreadPool, then Sync. Invalid queue depth remains
+`std::invalid_argument` and is not hidden by fallback.
+
+The nested `stage13_no_liburing_build` CTest configures a fresh build with the
+option off, builds both the factory test and complete pipeline demo, verifies
+Auto transforms `abc` to `bcd` through ThreadPool, and verifies explicit Uring
+fails before creating final output. This checks compilation, linking, policy,
+and data correctness together.
+
+### `O_DIRECT` Pass, Skip, and Failure
+
+`stage13_odirect_contract` writes a fixed fixture normally, reopens it with
+`O_DIRECT`, and uses the project's `AlignedBuffer`:
+
+```text
+4096-aligned address + 4096 length + offset 0 -> full correct read
+address + 1                                  -> EINVAL
+length 4095                                  -> EINVAL
+offset 1                                     -> EINVAL
+```
+
+Direct-I/O support is filesystem- and kernel-dependent. The test therefore has
+three honest outcomes:
+
+- pass: the local filesystem enforces the tested contract;
+- CTest skip (exit 77): direct I/O is unavailable or has a different contract;
+- fail: setup or an unexpected error violates the test's own assumptions.
+
+A skip preserves portability. It must not be displayed as success, and this
+isolated read test must not be described as production direct-I/O support.
+
+### Recorded Acceptance and Remaining Boundary
+
+On 2026-08-11, the Release pipeline processed an allocated 50 GiB ext4 input
+as 6,400 blocks with an 8 MiB block size, 24 buffers, and queue depth 8. Auto
+selected io_uring; output verification passed; in-flight peak was 19/24, both
+queue peaks were 8/8, and process peak RSS was 159,640 KiB under the 300 MiB T1
+limit. The input SHA-256 and exact environment are recorded in
+`docs/stage13_environment_acceptance.md`.
+
+ASan/UBSan Stage 13 tests pass. GCC TSan binaries compile, but this WSL2 host
+aborts both before test logic with `ThreadSanitizer: unexpected memory mapping`.
+Consequently T7 is environment-limited, not passed. T1b also remains incomplete
+because the 200 GiB run was intentionally omitted. The acceptance matrix is
+the authoritative list for T2, T3, T5, and T9 as well.
+
+### Invariant Preservation
+
+Stage 13 adds no per-block container and changes no handoff topology. The
+ownership path remains:
+
+```text
+AlignedBufferPool
+  -> reader-local BufferHandle
+  -> read/process queue
+  -> processor-local BlockWorkItem
+  -> process/write queue
+  -> writer-local BlockWorkItem
+  -> BufferHandle destructor
+  -> AlignedBufferPool
+```
+
+Error injection tests use fixed scripts, the crash test uses three tiny blocks,
+and the environment tests stream one block at a time. Metrics, bounded queues,
+backpressure, positional writes, and reliable publication are observed rather
+than bypassed.

@@ -12,9 +12,47 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
-find_package(PkgConfig REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
-pkg_check_modules(LIBURING REQUIRED IMPORTED_TARGET liburing)
+
+option(
+  ASYNCDATALOADER_ENABLE_LIBURING
+  "Build io_uring learning targets and the io_uring backend when available"
+  ON
+)
+
+set(ASYNCDATALOADER_HAS_LIBURING OFF)
+if(ASYNCDATALOADER_ENABLE_LIBURING)
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(LIBURING QUIET IMPORTED_TARGET liburing)
+  endif()
+  if(LIBURING_FOUND)
+    set(ASYNCDATALOADER_HAS_LIBURING ON)
+  else()
+    message(WARNING
+      "liburing was not found; building ThreadPool/Sync fallback paths only"
+    )
+  endif()
+else()
+  message(STATUS
+    "liburing support disabled; building ThreadPool/Sync fallback paths only"
+  )
+endif()
+
+if(ASYNCDATALOADER_HAS_LIBURING)
+  add_compile_definitions(ASYNCDATALOADER_HAS_LIBURING=1)
+  set(ASYNCDATALOADER_URING_BACKEND_SOURCES
+    src/coroutine/uring_read_awaiter.cpp
+    src/backend/uring_backend.cpp
+  )
+  set(ASYNCDATALOADER_URING_LIBRARIES PkgConfig::LIBURING)
+  message(STATUS "AsyncDataLoader io_uring backend: enabled")
+else()
+  add_compile_definitions(ASYNCDATALOADER_HAS_LIBURING=0)
+  set(ASYNCDATALOADER_URING_BACKEND_SOURCES)
+  set(ASYNCDATALOADER_URING_LIBRARIES)
+  message(STATUS "AsyncDataLoader io_uring backend: unavailable")
+endif()
 
 add_executable(asyncdataloader_stage0 src/main.cpp)
 target_compile_features(asyncdataloader_stage0 PRIVATE cxx_std_20)
@@ -111,6 +149,7 @@ add_executable(stage3_benchmark_stats_test
 )
 target_link_libraries(stage3_benchmark_stats_test PRIVATE asyncdataloader_benchmark)
 
+if(ASYNCDATALOADER_HAS_LIBURING)
 add_executable(stage4_uring_read_once
   src/util/fd_guard.cpp
   src/util/file_io.cpp
@@ -136,6 +175,7 @@ add_executable(stage4_uring_write_demo
 target_compile_features(stage4_uring_write_demo PRIVATE cxx_std_20)
 target_include_directories(stage4_uring_write_demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(stage4_uring_write_demo PRIVATE PkgConfig::LIBURING)
+endif()
 
 add_executable(stage5_task_test
   tests/stage5_task_test.cpp
@@ -152,6 +192,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+if(ASYNCDATALOADER_HAS_LIBURING)
 add_executable(stage5_async_read_demo
   src/util/fd_guard.cpp
   src/util/file_io.cpp
@@ -164,6 +205,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(stage5_async_read_demo PRIVATE PkgConfig::LIBURING)
+endif()
 
 add_executable(stage6_io_backend_contract_test
   tests/stage6_io_backend_contract_test.cpp
@@ -186,6 +228,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+if(ASYNCDATALOADER_HAS_LIBURING)
 add_executable(stage6_uring_backend_test
   src/util/fd_guard.cpp
   src/util/file_io.cpp
@@ -199,6 +242,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(stage6_uring_backend_test PRIVATE PkgConfig::LIBURING)
+endif()
 
 add_executable(stage6_thread_pool_backend_test
   src/util/fd_guard.cpp
@@ -216,11 +260,10 @@ target_link_libraries(stage6_thread_pool_backend_test PRIVATE Threads::Threads)
 add_executable(stage6_backend_factory_test
   src/util/fd_guard.cpp
   src/util/file_io.cpp
-  src/coroutine/uring_read_awaiter.cpp
   src/backend/sync_backend.cpp
-  src/backend/uring_backend.cpp
   src/backend/thread_pool_backend.cpp
   src/backend/backend_factory.cpp
+  ${ASYNCDATALOADER_URING_BACKEND_SOURCES}
   tests/stage6_backend_factory_test.cpp
 )
 target_compile_features(stage6_backend_factory_test PRIVATE cxx_std_20)
@@ -230,17 +273,16 @@ target_include_directories(
 )
 target_link_libraries(
   stage6_backend_factory_test
-  PRIVATE PkgConfig::LIBURING Threads::Threads
+  PRIVATE ${ASYNCDATALOADER_URING_LIBRARIES} Threads::Threads
 )
 
 add_executable(stage6_backend_fallback_demo
   src/util/fd_guard.cpp
   src/util/file_io.cpp
-  src/coroutine/uring_read_awaiter.cpp
   src/backend/sync_backend.cpp
-  src/backend/uring_backend.cpp
   src/backend/thread_pool_backend.cpp
   src/backend/backend_factory.cpp
+  ${ASYNCDATALOADER_URING_BACKEND_SOURCES}
   examples/backend_fallback_demo.cpp
 )
 target_compile_features(stage6_backend_fallback_demo PRIVATE cxx_std_20)
@@ -250,7 +292,7 @@ target_include_directories(
 )
 target_link_libraries(
   stage6_backend_fallback_demo
-  PRIVATE PkgConfig::LIBURING Threads::Threads
+  PRIVATE ${ASYNCDATALOADER_URING_LIBRARIES} Threads::Threads
 )
 
 add_library(asyncdataloader_pipeline
@@ -542,8 +584,7 @@ add_executable(preprocess_pipeline_demo
   src/backend/backend_factory.cpp
   src/backend/sync_backend.cpp
   src/backend/thread_pool_backend.cpp
-  src/backend/uring_backend.cpp
-  src/coroutine/uring_read_awaiter.cpp
+  ${ASYNCDATALOADER_URING_BACKEND_SOURCES}
   src/util/fd_guard.cpp
   src/util/file_io.cpp
   examples/preprocess_pipeline_demo.cpp
@@ -554,7 +595,7 @@ target_link_libraries(
   PRIVATE
     asyncdataloader_pipeline
     asyncdataloader_reporting
-    PkgConfig::LIBURING
+    ${ASYNCDATALOADER_URING_LIBRARIES}
     Threads::Threads
 )
 
@@ -602,8 +643,7 @@ add_executable(stage11_bench_backends
   src/backend/backend_factory.cpp
   src/backend/sync_backend.cpp
   src/backend/thread_pool_backend.cpp
-  src/backend/uring_backend.cpp
-  src/coroutine/uring_read_awaiter.cpp
+  ${ASYNCDATALOADER_URING_BACKEND_SOURCES}
   src/util/fd_guard.cpp
   src/util/file_io.cpp
   src/util/timer.cpp
@@ -615,8 +655,64 @@ target_link_libraries(
   PRIVATE
     asyncdataloader_stage11_benchmark
     asyncdataloader_benchmark
-    PkgConfig::LIBURING
+    ${ASYNCDATALOADER_URING_LIBRARIES}
     Threads::Threads
+)
+
+add_executable(stage13_file_io_error_paths_test
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  tests/stage13_file_io_error_paths_test.cpp
+)
+target_compile_features(stage13_file_io_error_paths_test PRIVATE cxx_std_20)
+target_include_directories(
+  stage13_file_io_error_paths_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_executable(stage13_backend_factory_failure_test
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  src/backend/sync_backend.cpp
+  src/backend/thread_pool_backend.cpp
+  src/backend/backend_factory.cpp
+  ${ASYNCDATALOADER_URING_BACKEND_SOURCES}
+  tests/stage13_backend_factory_failure_test.cpp
+)
+target_compile_features(
+  stage13_backend_factory_failure_test
+  PRIVATE cxx_std_20
+)
+target_include_directories(
+  stage13_backend_factory_failure_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(
+  stage13_backend_factory_failure_test
+  PRIVATE ${ASYNCDATALOADER_URING_LIBRARIES} Threads::Threads
+)
+
+add_executable(stage13_crash_safety_test
+  src/backend/sync_backend.cpp
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  tests/stage13_crash_safety_test.cpp
+)
+target_compile_features(stage13_crash_safety_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage13_crash_safety_test
+  PRIVATE asyncdataloader_pipeline
+)
+
+add_executable(stage13_odirect_contract_test
+  src/util/fd_guard.cpp
+  src/util/file_io.cpp
+  tests/stage13_odirect_contract_test.cpp
+)
+target_compile_features(stage13_odirect_contract_test PRIVATE cxx_std_20)
+target_link_libraries(
+  stage13_odirect_contract_test
+  PRIVATE asyncdataloader_buffer
 )
 
 enable_testing()
@@ -695,6 +791,7 @@ add_test(
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage3_bench_pread_test.cmake
 )
 
+if(ASYNCDATALOADER_HAS_LIBURING)
 add_test(
   NAME stage4_uring_read_once
   COMMAND
@@ -718,6 +815,7 @@ add_test(
     -D EXECUTABLE_PATH=$<TARGET_FILE:stage4_uring_write_demo>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage4_uring_write_demo_test.cmake
 )
+endif()
 
 add_test(NAME stage5_task COMMAND stage5_task_test)
 add_test(
@@ -725,6 +823,7 @@ add_test(
   COMMAND stage5_completion_request_test
 )
 
+if(ASYNCDATALOADER_HAS_LIBURING)
 add_test(
   NAME stage5_async_read_demo
   COMMAND
@@ -732,6 +831,7 @@ add_test(
     -D EXECUTABLE_PATH=$<TARGET_FILE:stage5_async_read_demo>
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage5_async_read_demo_test.cmake
 )
+endif()
 
 add_test(
   NAME stage6_io_backend_contract
@@ -743,10 +843,12 @@ add_test(
   COMMAND stage6_sync_backend_test
 )
 
+if(ASYNCDATALOADER_HAS_LIBURING)
 add_test(
   NAME stage6_uring_backend
   COMMAND stage6_uring_backend_test
 )
+endif()
 
 add_test(
   NAME stage6_thread_pool_backend
@@ -763,6 +865,7 @@ add_test(
   COMMAND
     ${CMAKE_COMMAND}
     -D EXECUTABLE_PATH=$<TARGET_FILE:stage6_backend_fallback_demo>
+    -D HAS_LIBURING=${ASYNCDATALOADER_HAS_LIBURING}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage6_backend_fallback_demo_test.cmake
 )
 
@@ -1044,4 +1147,44 @@ add_test(
 set_tests_properties(
   stage12_preprocess_pipeline_demo
   PROPERTIES TIMEOUT 10
+)
+
+add_test(
+  NAME stage13_file_io_error_paths
+  COMMAND stage13_file_io_error_paths_test
+)
+add_test(
+  NAME stage13_backend_factory_failures
+  COMMAND stage13_backend_factory_failure_test
+)
+add_test(
+  NAME stage13_crash_safety
+  COMMAND stage13_crash_safety_test
+)
+add_test(
+  NAME stage13_odirect_contract
+  COMMAND stage13_odirect_contract_test
+)
+add_test(
+  NAME stage13_no_liburing_build
+  COMMAND
+    ${CMAKE_COMMAND}
+    -D SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stage13_no_liburing_build_test.cmake
+)
+set_tests_properties(
+  stage13_file_io_error_paths
+  stage13_backend_factory_failures
+  stage13_crash_safety
+  PROPERTIES TIMEOUT 30
+)
+set_tests_properties(
+  stage13_odirect_contract
+  PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 30
+)
+set_tests_properties(
+  stage13_no_liburing_build
+  PROPERTIES TIMEOUT 180
 )

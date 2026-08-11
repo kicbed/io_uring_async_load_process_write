@@ -1,6 +1,9 @@
 if(NOT DEFINED EXECUTABLE_PATH)
   message(FATAL_ERROR "EXECUTABLE_PATH is required")
 endif()
+if(NOT DEFINED HAS_LIBURING)
+  message(FATAL_ERROR "HAS_LIBURING is required")
+endif()
 
 get_filename_component(executable_dir "${EXECUTABLE_PATH}" DIRECTORY)
 set(input_path "${executable_dir}/stage6_backend_fallback_input.bin")
@@ -36,7 +39,26 @@ endfunction()
 
 expect_success("sync" "sync" "--backend=sync")
 expect_success("thread_pool" "thread_pool" "--backend=thread_pool")
-expect_success("uring" "io_uring" "--backend=uring")
+if(HAS_LIBURING)
+  expect_success("uring" "io_uring" "--backend=uring")
+else()
+  execute_process(
+    COMMAND "${EXECUTABLE_PATH}" "${input_path}" "--backend=uring"
+    RESULT_VARIABLE explicit_uring_result
+    OUTPUT_VARIABLE explicit_uring_stdout
+    ERROR_VARIABLE explicit_uring_stderr
+  )
+  if(explicit_uring_result EQUAL 0 OR
+     NOT explicit_uring_stderr MATCHES "not compiled")
+    message(FATAL_ERROR
+      "explicit Uring should fail clearly when liburing is not compiled\n"
+      "result=${explicit_uring_result}\n"
+      "stdout=${explicit_uring_stdout}\n"
+      "stderr=${explicit_uring_stderr}"
+    )
+  endif()
+  expect_success("auto" "thread_pool" "--backend=auto")
+endif()
 expect_success(
   "auto"
   "thread_pool"

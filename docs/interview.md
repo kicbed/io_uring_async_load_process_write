@@ -314,6 +314,11 @@ It does not prove end-to-end throughput, processing-stage overlap, large-file
 memory bounds, or that io_uring is faster. Those claims require later pipeline
 and benchmark stages.
 
+Stage 13 closes the separate build-time case: CMake can omit all Uring sources
+and links, Auto still runs the complete pipeline through ThreadPool, and an
+explicit Uring request fails with `ENOSYS`. This is stronger than a runtime
+disable switch because it proves the fallback build graph itself is complete.
+
 ## Stage 7: Stage Registration and Pipeline Framework
 
 ### What problem does the Stage interface solve?
@@ -480,6 +485,12 @@ file offset, and the values vary by filesystem and kernel. `statx()` with
 `STATX_DIOALIGN` can report requirements when supported. Stage 8 prepares
 aligned storage; the future I/O path must still validate offsets, partial
 blocks, support, and fallback behavior.
+
+Stage 13 later adds an isolated real-filesystem test: one 4096-aligned read
+must return correct bytes, while address+1, length 4095, and offset 1 must return
+`EINVAL` on the tested filesystem. The test skips if the host cannot provide
+that contract. The production pipeline remains buffered, so this is contract
+evidence rather than a claim of end-to-end `O_DIRECT` support.
 
 ### What does the backpressure demo prove?
 
@@ -710,8 +721,10 @@ It does not prove that io_uring is fastest, that coroutines improve speed, or
 that a particular backend wins. It also does not yet provide controlled
 large-file RSS evidence, multi-core out-of-order processing, automated
 `kill -9` acceptance, or final acceptance coverage. Stage 11 later added
-controlled measurements and Stage 12 added terminal/JSON reporting; unresolved
-acceptance work remains an explicit Stage 13 boundary.
+controlled measurements, Stage 12 added terminal/JSON reporting, and Stage 13
+later added a 50 GiB T1 record plus real `SIGKILL` coverage. Multi-core
+out-of-order processing and several performance acceptance items remain
+explicitly unclaimed.
 
 Interview-ready short version:
 
@@ -810,3 +823,173 @@ Interview-ready short version:
 > compatible machine records, and optional schema-versioned JSON. JSON uses
 > temp-file, fsync, atomic rename, and directory fsync, while the reporter owns
 > no buffers and cannot change backpressure or ordering.
+
+## Stage 13: Error Tests, Acceptance, and Engineering Boundaries
+
+### Why not test rare syscall failures only with real machines?
+
+Errors such as a write that succeeds for two bytes, then returns `EINTR`, then
+succeeds again are timing- and environment-dependent. Waiting for the operating
+system to produce that exact sequence makes a flaky test. Stage 13 keeps the
+public API unchanged but moves the retry algorithm behind a small internal
+operation table. Tests inject exact return values while production passes the
+real syscall functions.
+
+This tests the real loop rather than a copied fake implementation:
+
+```text
+scripted pwrite: 2 -> EINTR -> 3
+  -> production write_all_at_with()
+  -> pointer advances only after progress
+  -> offset advances only after progress
+  -> EINTR retries without progress
+  -> total result is exactly 5 bytes
+```
+
+The same idea tests BackendFactory construction policy. Explicit selection
+propagates its error; Auto catches only construction-time `system_error` and
+continues to the next candidate. Invalid configuration and operation-time read
+errors remain visible.
+
+### How does the real `kill -9` test work?
+
+A parent executes a child mode that runs the real BufferPool, two bounded
+queues, three workers, SyncBackend, and a modifying Stage. A pipe lets the Stage
+announce that block 2 has entered processing and then block there. The parent
+also verifies that the temporary file already contains transformed block 1.
+Only then does it send `SIGKILL`.
+
+`waitpid()` must report termination by `SIGKILL`. If an old final file existed,
+it must remain byte-for-byte unchanged; if no final existed, it must remain
+absent. This proves the final filename never exposes the partial temporary
+payload before rename.
+
+An orphan temp file is allowed after `SIGKILL` because the signal cannot run
+destructors. Automatic recovery of such names would require a separately
+designed multi-process scavenging policy; it is not silently claimed here.
+
+### What is the difference between runtime and build-time fallback?
+
+Runtime fallback means Uring code was compiled, but ring construction failed.
+Build-time fallback means the binary contains no Uring sources or liburing link
+at all. Stage 13 supports both:
+
+```text
+default CMake probe succeeds -> Uring + ThreadPool + Sync
+probe fails or option is OFF -> ThreadPool + Sync only
+
+Auto + no Uring code -> ThreadPool -> possibly Sync
+explicit Uring       -> clear ENOSYS error
+```
+
+A nested CTest performs a fresh no-liburing configure/build, runs the complete
+pipeline, checks `abc -> bcd`, and ensures explicit Uring fails before creating
+final output. This prevents a fallback claim that works only in an already
+liburing-linked binary.
+
+### What exactly does the `O_DIRECT` test prove?
+
+It proves that the current ext4/kernel combination accepts a 4096-aligned
+project `AlignedBuffer` read and rejects three misalignment dimensions with
+`EINVAL`: address, byte count, and file offset. It does not prove that every
+filesystem uses 4096, that partial tail blocks are solved, or that the main
+pipeline uses direct I/O.
+
+The test returns CTest skip code 77 when the filesystem lacks or differs from
+the tested direct-I/O contract. Treating environment absence as skip keeps the
+suite portable; treating it as pass would fabricate evidence.
+
+### What did the 50 GiB acceptance run prove?
+
+With 8 MiB blocks, 24 buffers, and queue depth 8, an allocated 50 GiB input was
+processed as 6,400 blocks. Auto selected io_uring, all output passed bounded
+verification, in-flight usage peaked at 19/24, both queue peaks stayed at 8/8,
+and whole-process peak RSS was 159,640 KiB under the 300 MiB limit. This is a
+recorded T1 pass for that WSL2/ext4 environment.
+
+It was one zero-filled, no-cache-drop sample, so its throughput is not a
+universal backend result. T1b is not complete because the 200 GiB point was
+intentionally not run.
+
+### Why is TSan not marked passed?
+
+The GCC TSan targets compile, but both selected binaries abort before reaching
+their test bodies with:
+
+```text
+ThreadSanitizer: unexpected memory mapping
+```
+
+Both exit with code 66 on this WSL2 runtime. That is an environment/tool-runtime
+failure, not a detected race and not proof of race freedom. ASan/UBSan Stage 13
+tests do pass. A native Linux environment that can run TSan is still required
+for full T7.
+
+### Which acceptance items remain incomplete?
+
+- T1 passes once; T1b lacks the 200 GiB point.
+- T2 has no isolated unbounded ablation mode; the production path remains
+  bounded and must not be weakened just to create it.
+- T3 has a three-worker architecture and overlap harness, but no stable timing
+  evidence meeting the declared acceleration criterion.
+- T5 needs a deliberately multi-worker, out-of-order CPU scheduler.
+- T7 needs a TSan-capable native Linux full-load run.
+- T9 needs a controlled CPU-heavy Stage experiment.
+
+This answer is stronger than saying “all tests pass”: it separates implemented
+mechanisms, automated correctness, environment evidence, and future scheduler
+or performance work.
+
+## One-Minute Project Introduction
+
+> AsyncDataLoader 是一个 C++20/Linux 大文件离线预处理流水线，不是把整个文件
+> 读进内存的普通 loader。数据按 block 流过 reader、CPU processing、writer 三个
+> worker；固定大小的对齐 BufferPool 限制 payload 内存，两条固定容量队列把下游
+> 压力传回 reader，move-only BufferHandle 用 RAII 表达唯一所有权并自动归还。
+> 读取层统一成 IOBackend，支持 io_uring、固定线程池和同步实现，只有 Auto 模式
+> 可以 fallback。输出按 offset 写入同目录临时文件，经过 fsync、原子 rename 和
+> 目录 fsync 后才发布。项目还包含 stage/read/process/write 指标、Release benchmark、
+> 确定性错误注入和真实 SIGKILL 测试。一次 50 GiB 验收在 192 MiB BufferPool 配置下
+> 峰值 RSS 为 159,640 KiB且输出验证通过；我同时明确保留 T1b、TSan 和多核乱序等
+> 尚未完成的工程边界。
+
+## Three-Minute Project Introduction
+
+> 我做这个项目是为了把串行的 read-process-write 改造成可解释、可验证的系统流水线。
+> 第一层是 I/O 抽象：IOBackend 返回统一的 coroutine Task，Sync 在调用线程执行
+> pread，ThreadPool 用固定 worker 做阻塞 I/O offload，Uring 用 SQE/CQE 恢复协程。
+> 协程负责组织状态，不被宣称为性能来源。BackendFactory 区分显式和 Auto：显式选择
+> 不可用就失败，Auto 才按 Uring、ThreadPool、Sync 回退；即使编译时完全关闭
+> liburing，完整 pipeline 仍能构建和正确运行。
+>
+> 第二层是有界流水线。AlignedBufferPool 预先拥有固定数量的 block，BufferHandle
+> 是 move-only lease。一个 BlockWorkItem 带着 lease、block index、file offset 和
+> valid bytes，从 reader 移动到处理队列，再到 writer 队列。队列满或池为空都会阻塞
+> 上游，因此 reader 不可能无限超前。processor 执行注册的真实 ByteIncrementStage，
+> writer 用完整 pwrite 循环写到明确 offset。异常时两个队列广播同一 exception_ptr，
+> 排队 work item 析构后 lease 自动回池，三个线程 join 后把第一处错误重新抛给调用者。
+>
+> 第三层是正确性、可靠性和证据。最终输出只在临时文件 fsync 成功后原子 rename，随后
+> fsync 目录；真实父子进程测试在第二块处理中发送 SIGKILL，证明最终名字不会出现
+> 半成品。Counter、Gauge、固定桶 Histogram 记录块数、字节数、队列/在飞峰值以及
+> read/process/write 和每个 Stage 的延迟。Release 工具保留 serial oracle、重叠对照、
+> backend 矩阵和 RSS sweep。50 GiB T1 运行写完 6,400 块、逐块校验通过，峰值 RSS
+> 约 155.9 MiB；但单次结果不被包装成 io_uring 永远更快，200 GiB、TSan 可运行环境、
+> 多核乱序和 CPU-heavy 重叠实验仍在验收矩阵中明确标为未完成。
+
+## Resume-Ready Wording
+
+- 设计并实现 C++20/Linux 有界内存大文件预处理流水线，以固定对齐 BufferPool、
+  move-only RAII lease 和双有界队列完成 reader/process/writer 三级流式交接与背压。
+- 抽象 Sync、固定线程池和 io_uring 三种读取策略，以 C++20 coroutine Task 统一完成
+  语义；实现显式 fail-fast 与 Auto 构造期 fallback，并支持无 liburing 的完整构建。
+- 通过显式 offset 完整写、临时文件、file fsync、原子 rename 和 directory fsync
+  可靠发布结果；使用真实 SIGKILL 父子进程测试证明 commit 前不暴露半成品。
+- 构建有界 Counter/Gauge/Histogram 指标和 Release benchmark/RSS sweep；记录一次
+  50 GiB 输入、192 MiB BufferPool 配置下 159,640 KiB 峰值 RSS且逐块校验通过。
+- 为 `EACCES`、`EINTR`、短写、backend 构造失败和 `O_DIRECT` 三维对齐错误建立可判错
+  测试，并明确区分自动通过、环境 skip、工具链阻塞和未完成验收，避免夸大性能结论。
+
+Do not write “coroutines made I/O faster” or “io_uring is always fastest” on
+the resume. The defensible claim is that the project provides a bounded,
+observable architecture and records controlled evidence for each environment.

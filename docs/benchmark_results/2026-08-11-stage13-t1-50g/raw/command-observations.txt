@@ -1,0 +1,9 @@
+input_bytes=53687091200
+allocated_512b_blocks=104857616
+du_bytes=53687099392
+checksum_wall_seconds=152.15
+checksum_max_rss_kib=1880
+sweep_status=complete
+sweep_runs=1
+sweep_wall_seconds=523.54
+sweep_launcher_max_rss_kib=159640
